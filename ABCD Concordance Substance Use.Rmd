@@ -1,0 +1,2239 @@
+---
+title: "CM Syntax Review #3 - Internship Paper"
+author: "ReJoyce Green"
+output:
+  word_document:
+    toc: true
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
+editor_options:
+  chunk_output_type: console
+---
+
+# Overview
++ Syntax from CM 'Concordance Paper Syntax Updated 3..txt' file. 
++ RG changes: 
+  + minor formatting changes to take syntax from .txt to .Rmd
+  + major changes are indicated in syntax ('RG NOTE') and in notes section of syntax
+
+# Data wrangling 
+
+## Create final dataset based on inclusion criteria
++ Inclusion criteria #1
+  + sufficient data present to create concordance variable from Community Risk 
+    and Protective Factors Survey (CRPF) either alcohol or cannabis 
+    - data needed for youth AND parent report for CRPF - alcohol questions 0R
+    - data needed for youth AND parent report for CRPF - cannabis 
+ + note: 
+   - criteria for youth to be administered these questions is having heard
+     of alcohol or cannabis at the 2-year timepoint
+   - therefore, we can assume that all have heard of either alcohol or 
+     or cannabis if they have meet this 1st inclusion criteria 
+
++ Inclusion criteria #2
+  + attended 30-month or 3-year visit 
+    - based on inclusion criteria #1, we know all have heard of alcohol OR
+      cannabis 
+
+```{r eval = FALSE}
+# load relevant packages
+library(dplyr)
+library(tidyr)
+library(broom)
+library(tidyverse)
+library(psych)
+library(DescTools)
+library(Hmisc)
+library(mice)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(broom.mixed)
+library(mitml)
+library(rcompanion)
+library(performance)
+library(car)
+library(DHARMa)
+library(summarytools)
+library(gtsummary)
+library(rstatix)
+library(doParallel)
+library(doRNG)
+library(plotly)
+
+
+#------------------------------------------------------------------------------#
+#                         Inclusion Criteria #1
+#------------------------------------------------------------------------------#
+
+# import CRPF parent and youth data
+su_p_crpf <- read_csv('data/su_p_crpf.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  select(src_subject_id, su_risk_p_1, su_risk_p_4)
+
+su_y_crpf <- read_csv('data/su_y_crpf.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  select(src_subject_id, su_crpf_avail_1, su_crpf_avail_4)
+  
+# merge into single dataframe
+crpf <- su_p_crpf %>%
+  full_join(su_y_crpf, by = 'src_subject_id')
+  
+rm(su_p_crpf, su_y_crpf)
+
+table(crpf$su_risk_p_1, useNA = 'ifany')
+table(crpf$su_risk_p_4, useNA = 'ifany')
+table(crpf$su_crpf_avail_1, useNA = 'ifany')
+table(crpf$su_crpf_avail_4, useNA = 'ifany')
+
+#--- RG NOTE:
+# - As a general note, it may be helpful to get a breakdown of the number of 
+#   values recoded from 777 or 999 to NA to include in supplemental materials. 
+#--- RG NOTE:
+
+# recode values of 'Don't Know' 
+crpf <- crpf %>%
+  mutate(
+    across(
+      .cols = starts_with('su_risk'),
+      .fns = ~ ifelse(.x == 4, NA, .x)))
+      
+crpf <- crpf %>%
+  mutate(
+    across(
+      .cols = starts_with('su_crpf'),
+      .fns = ~ ifelse(.x == 999, NA, .x)))
+
+table(crpf$su_risk_p_1, useNA = 'ifany')
+table(crpf$su_risk_p_4, useNA = 'ifany')
+table(crpf$su_crpf_avail_1, useNA = 'ifany')
+table(crpf$su_crpf_avail_4, useNA = 'ifany')      
+      
+# create single concordance variable
+crpf <- crpf %>%
+  mutate(
+    # cannabis
+    crpf_p_cb = case_when(
+      su_risk_p_4 == 0 | su_risk_p_4 == 1 ~ 'Hard',
+      su_risk_p_4 == 2 | su_risk_p_4 == 3 ~ 'Easy'),
+    crpf_y_cb = case_when(
+      su_crpf_avail_4 == 1 | su_crpf_avail_4 == 2 ~ 'Hard',
+      su_crpf_avail_4 == 3 | su_crpf_avail_4 == 4 ~ 'Easy'),
+    # alcohol
+    crpf_p_alc = case_when(
+      su_risk_p_1 == 0 | su_risk_p_1 == 1 ~ 'Hard',
+      su_risk_p_1 == 2 | su_risk_p_1 == 3 ~ 'Easy'),
+    crpf_y_alc = case_when(
+      su_crpf_avail_1 == 1 | su_crpf_avail_1 == 2 ~ 'Hard',
+      su_crpf_avail_1 == 3 | su_crpf_avail_1 == 4 ~ 'Easy')) %>% 
+  mutate(
+    crpf_p_cb = as.factor(crpf_p_cb),
+    crpf_y_cb = as.factor(crpf_y_cb),
+    crpf_p_alc = as.factor(crpf_p_alc),
+    crpf_y_alc = as.factor(crpf_y_alc)) %>% 
+  mutate(
+    cc_cb = case_when(
+      crpf_p_cb == 'Hard' & crpf_y_cb == 'Hard' ~ 'Concordance Limited C',
+      crpf_p_cb == 'Easy' & crpf_y_cb == 'Easy' ~ 'Concordance Unlimited C',
+      crpf_p_cb == 'Hard' & crpf_y_cb == 'Easy' ~ 'Discordance Unlimted C',
+      crpf_p_cb == 'Easy' & crpf_y_cb == 'Hard' ~ 'Discordance Limited C'),
+    cc_alc = case_when(
+      crpf_p_alc == 'Hard' & crpf_y_alc == 'Hard' ~ 'Concordance Limited A',
+      crpf_p_alc == 'Easy' & crpf_y_alc == 'Easy' ~ 'Concordance Unlimited A',
+      crpf_p_alc == 'Hard' & crpf_y_alc == 'Easy' ~ 'Discordance Unlimted A',
+      crpf_p_alc == 'Easy' & crpf_y_alc == 'Hard' ~ 'Discordance Limited A'))
+      
+# only include those who have concordance variable for alcohol OR cannabis
+table(crpf$cc_cb, useNA = 'ifany')
+table(crpf$cc_alc, useNA = 'ifany')
+table(crpf$cc_cb, crpf$cc_alc, useNA = 'ifany') 
+# n = 2032 missing concordance on alcohol AND cannabis to be excluded 
+
+crpf <- crpf %>% 
+  subset(!is.na(cc_cb) | !is.na(cc_alc)) 
+# expected n: original (10962) - to be dropped (2032) = 8930
+
+# retain only required variables for final dataset
+crpf <- crpf %>% 
+  select(src_subject_id, cc_cb, cc_alc) %>% 
+  mutate(
+    cc_cb = as.factor(cc_cb),
+    cc_alc = as.factor(cc_alc))
+  
+# begin creating final dataset
+df_final <- crpf %>%
+  select(src_subject_id, cc_cb, cc_alc)
+  
+# proportion missing concordance results
+table(df_final$cc_cb, useNA = 'ifany')
+table(df_final$cc_alc, useNA = 'ifany')
+
+#descriptive
+describe(df_final$cc_cb)
+describe(df_final$cc_alc)
+
+rm(crpf)
+
+#------------------------------------------------------------------------------#
+#                         Inclusion Criteria #2
+#------------------------------------------------------------------------------#
+
+# import longitudinal tracking data
+
+IC_2 <- read_csv('data/abcd_y_lt.csv') %>% 
+  subset(
+    eventname == '30_month_follow_up_arm_1' |
+      eventname == '3_year_follow_up_y_arm_1') %>% 
+  select(src_subject_id, eventname) %>% 
+  pivot_wider(id_cols = 'src_subject_id',
+              names_from = 'eventname',
+              names_sep = ".",
+              values_from = c(eventname)) %>% 
+  rename(
+    visit_30m = '30_month_follow_up_arm_1',
+    visit_3y = '3_year_follow_up_y_arm_1') %>% 
+  # create variable to indicate attended 30-m, 3-y, or 30-m
+  mutate(
+    visit_att = case_when(
+      !is.na(visit_30m) & !is.na(visit_3y) ~ 'Visit: 30-month & 3-year',
+      !is.na(visit_30m) & is.na(visit_3y) ~ 'Visit: 30-month only',
+      is.na(visit_30m) & !is.na(visit_3y) ~ 'Visit: 3-year only')) %>% 
+  select(src_subject_id, visit_att)
+
+# n = 10932 in IC_2
+# - 10,932 higher than n at 3-yr follow-up in 5.1 release notes
+#   to be expected given we are also including those who attended the 30-month
+#   but did not attend the 3-year
+
+# merge w/existing final dataset
+df_final <- df_final %>% 
+  left_join(IC_2, by = 'src_subject_id') 
+
+# drop those who did not attend 30-month or 3-year
+table(df_final$visit_att, useNA = 'ifany')
+# n = 217 did not attend 3-year as indicated by missing data
+  
+df_final <- df_final %>% 
+  subset(!is.na(visit_att))
+
+rm(IC_2)
+
+#--- Final Sample Size ---#
+# n = 10973
+#   - initial sample size for 2-year in 5.1 release notes
+# n = 10962
+#   - data present for parent or youth CRPF (sample size of crpf dataframe)
+# n = 8930
+#   - met inclusion criteria #1: data present for creating concordance 
+#     variable at 2-year follow-up
+# n = 8713
+#   - met inclusion criteria #2: attended 30-month or 3-year visit to create
+#     initiation outcome
+#--- Final Sample Size ---#
+
+# create dataset that only contains ID for final sample
+
+df_final_ID <- df_final %>% 
+  select(src_subject_id)
+
+#--- RG NOTE:
+# - I like to create a dataframe that only has IDs for the final sample. This
+#   way when I am starting to create summary scores for variables later on,
+#   and I want to subset to only include those in my final sample to see how
+#   the number of 777s I am changing to NA for example, I have an easy way to
+#   subset the dataframe based on these final IDs
+
+```
+
+
+## Create summary scores for relevant variables
+
++ Outcome
+  + (1) Substance use initiation 
+    + Based on the updates to the inclusion criteria, we can assume that all who have data for alcohol concordance
+      have heard of alcohol, and that all who have data present for cannabis concordance have heard of cannabis. Therefore,
+      previous inclusion criteria of having data present for 'heard of' alcohol or cannabis has been addressed with inclusion
+      criteria #1. 
+    + Lingering item to address: if someone did not indicate substance use at 30-month and did not attend 3-year, I would suggest 
+      not including them in the SU initiation models on the basis that they could have initiated at the 3-year mark but we do not
+      know. 
+  + (2) Expectancies
+    + Using pre-calculated summary scores where data must be present for all individual items for summary score to be created. 
+  + (3) Perceptions of Harm
+    + Creating summary scores defined as a sum of 3 items. Using all data available (i.e., if data present for only 2 individual
+      items, then final summary score reflects sum of those 2 items).
+    + Included a breakdown of the IDs that had data present for all 3 items, 2 items, or 1 item (for alcohol and cannabis, 
+      respectively). If missing data on all 3 individual items, then final summary score coded as 'NA' (previously was being
+      coded as 0)
+  
++ Covariates
+
+
+
+```{r eval = FALSE}
+
+#------------------------------------------------------------------------------#
+#                 Substance Initiation: Alcohol and Cannabis 
+#------------------------------------------------------------------------------#
+
+# import substance use (SU) data at baseline and follow-up
+su_yr <- read_csv('data/su_y_sui.csv') %>%
+  subset(eventname != '4_year_follow_up_y_arm_1') %>%
+  select(
+    src_subject_id, eventname,
+    # baseline
+    tlfb_alc_sip, isip_1b_yn, tlfb_mj_puff, tlfb_blunt_use, tlfb_mj_conc_use, 
+    tlfb_mj_drink_use, tlfb_tincture_use,
+    # yearly follow-up
+    tlfb_alc_sip_l, isip_1b_yn_l, tlfb_mj_puff_l, tlfb_blunt_use_l, 
+    tlfb_mj_conc_use_l, tlfb_mj_drink_use_l, tlfb_tincture_use_l,
+    # gating criteria
+    tlfb_alc, tlfb_alc_l, tlfb_mj, tlfb_mj_l) %>%
+mutate(eventname = case_when(
+  eventname == 'baseline_year_1_arm_1' ~ 'baseline',
+  eventname == '1_year_follow_up_y_arm_1' ~ '1_year',
+  eventname == '2_year_follow_up_y_arm_1' ~ '2_year',
+  eventname == '3_year_follow_up_y_arm_1' ~ '3_year'))
+
+# import substance use data at mid-year timepoints
+su_mid <- read_csv('data/su_y_mypi.csv') %>%
+subset(eventname != '42_month_follow_up_arm_1') %>%
+  select(
+    src_subject_id, eventname,
+    mypi_alc_sip, mypi_alc_sip_1b, mypi_mj_used, mypi_mj_edible, mypi_mj_oils,
+    mypi_mj_tinc_used, mypi_mj_vape, mypi_mj_oils_vaped,
+#gating criteria
+    mypi_alc, mypi_mj) %>%
+  mutate(eventname = case_when(
+    eventname == '6_month_follow_up_arm_1' ~ '6_month',
+    eventname == '18_month_follow_up_arm_1' ~ '18_month',
+    eventname == '30_month_follow_up_arm_1' ~ '30_month'))
+
+# transpose from long to wide
+su_yr_wide <- su_yr %>%
+  pivot_wider(id_cols = 'src_subject_id',
+              names_from = 'eventname',
+              names_sep = ".",
+              values_from = c(
+                tlfb_alc_sip, isip_1b_yn,
+                tlfb_alc_sip_l, isip_1b_yn_l,
+                tlfb_alc, tlfb_alc_l, tlfb_mj_puff, tlfb_blunt_use,
+                tlfb_mj_conc_use, tlfb_mj_drink_use,
+                tlfb_tincture_use,tlfb_mj_puff_l, tlfb_blunt_use_l,
+                tlfb_mj_conc_use_l, tlfb_mj_drink_use_l,
+                tlfb_tincture_use_l, tlfb_mj,tlfb_mj_l))
+
+su_mid_wide <- su_mid %>%
+  pivot_wider(id_cols = 'src_subject_id',
+              names_from = 'eventname',
+              names_sep = ".",
+              values_from = c(
+                mypi_alc_sip, mypi_alc_sip_1b, mypi_alc, 
+                mypi_mj_used, mypi_mj_edible, mypi_mj_oils, mypi_mj_tinc_used,
+                mypi_mj_vape, mypi_mj_oils_vaped, mypi_mj))
+                              
+df_sub <- su_yr_wide %>%
+  full_join(su_mid_wide, by = 'src_subject_id')
+
+# subset SU data to only include IDs in final dataset
+df_sub <- df_sub %>% 
+  right_join(df_final_ID, by = 'src_subject_id')
+
+# recode values of 777 as missing at mid-year timepoints
+df_sub <- df_sub %>%
+  mutate(
+    across(.cols = starts_with('mypi_') & ends_with('.6_month'),
+           .fns = ~replace(.x, .x == 777, NA))) %>%
+  mutate(
+    across(.cols = starts_with('mypi_') & ends_with('.18_month'),
+           .fns = ~replace(.x, .x == 777, NA))) %>%
+  mutate(
+    across(.cols = starts_with('mypi_') & ends_with('.30_month'),
+           .fns = ~replace(.x, .x == 777, NA)))
+           
+# general inclusion criteria: completed 2-year follow-up
+# - checked by checking for age at 2-year follow-up
+# su_yr <- read_csv('data/su_y_sui.csv') %>%
+#   arrange(src_subject_id) %>%
+#   subset(eventname == '2_year_follow_up_y_arm_1') %>%
+#   select(src_subject_id, tlfb_age_l) %>%
+#   rename(tlfb_age_l_2y = tlfb_age_l)
+
+# df_sub <- temp %>%
+#   subset(!is.na(tlfb_age_l_2y))
+
+# temp <- df_sub %>%
+#   left_join(su_yr, by = 'src_subject_id')
+
+# rm(temp, su_yr)
+
+#--- RG NOTE:
+# - I commented out the syntax above for checking who completed the 2-year 
+#   follow-up b/c I have created a final substance use dataset that only
+#   includes those who met the 2 inclusion criteria, so we know they attended
+#   the 2-year follow-up
+#--- RG NOTE:
+
+#----------
+# Create SU initiation variables
+#----------
+
+# (1) exclude if initiation at baseline, 6m, 1y, 18m, or 2y
+
+df_sub <- df_sub %>%
+  mutate(
+    alc_base = case_when(
+      isip_1b_yn.baseline == 1 ~ 1,
+      isip_1b_yn.baseline == 0 ~ 0,
+      is.na(isip_1b_yn.baseline) ~ 0),
+    alc_6m = case_when(
+      mypi_alc_sip_1b.6_month == 1 ~ 1,
+      mypi_alc_sip_1b.6_month == 0 ~ 0,
+      is.na(mypi_alc_sip_1b.6_month) ~ 0),
+    alc_1y = case_when(
+      isip_1b_yn_l.1_year == 1 ~ 1,
+      isip_1b_yn_l.1_year == 0 ~ 0,
+      is.na(isip_1b_yn_l.1_year) ~ 0),
+    alc_18m = case_when(
+      mypi_alc_sip_1b.18_month == 1 ~ 1,
+      mypi_alc_sip_1b.18_month == 0 ~ 0,
+      is.na(mypi_alc_sip_1b.18_month) ~ 0),
+    alc_2y = case_when(
+      isip_1b_yn_l.2_year == 1 ~ 1,
+      isip_1b_yn_l.2_year == 0 ~ 0,
+      is.na(isip_1b_yn_l.2_year) ~ 0)) %>% 
+  mutate(
+    cb_base_mj_puff = case_when(
+      tlfb_mj_puff.baseline == 1 ~ 1,
+      tlfb_mj_puff.baseline == 0 ~ 0,
+      is.na(tlfb_mj_puff.baseline) ~ 0),
+    cb_base_blunt_use = case_when(
+      tlfb_blunt_use.baseline == 1 ~ 1,
+      tlfb_blunt_use.baseline == 0 ~ 0,
+      is.na(tlfb_blunt_use.baseline) ~ 0),
+    cb_base_mj_conc_use = case_when(
+      tlfb_mj_conc_use.baseline == 1 ~ 1,
+      tlfb_mj_conc_use.baseline == 0 ~ 0,
+      is.na(tlfb_mj_conc_use.baseline) ~ 0),
+    cb_base_mj_drink_use = case_when(
+      tlfb_mj_drink_use.baseline == 1 ~ 1,
+      tlfb_mj_drink_use.baseline == 0 ~ 0,
+      is.na(tlfb_mj_drink_use.baseline) ~ 0),
+    cb_base_tincture_use = case_when(
+      tlfb_tincture_use.baseline == 1 ~ 1,
+      tlfb_tincture_use.baseline == 0 ~ 0,
+      is.na(tlfb_tincture_use.baseline) ~ 0),
+
+    cb_6m_mj_used = case_when(
+      mypi_mj_used.6_month == 1 ~ 1,
+      mypi_mj_used.6_month == 0 ~ 0,
+      is.na(mypi_mj_used.6_month) ~ 0),
+    cb_6m_mj_edible = case_when(
+      mypi_mj_edible.6_month == 1 ~ 1,
+      mypi_mj_edible.6_month == 0 ~ 0,
+      is.na(mypi_mj_edible.6_month) ~ 0),
+    cb_6m_mj_oils = case_when(
+      mypi_mj_oils.6_month == 1 ~ 1,
+      mypi_mj_oils.6_month == 0 ~ 0,
+      is.na(mypi_mj_oils.6_month) ~ 0),
+    cb_6m_mj_tinc_used = case_when(
+      mypi_mj_tinc_used.6_month == 1 ~ 1,
+      mypi_mj_tinc_used.6_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.6_month) ~ 0),
+    cb_6m_mj_vape = case_when(
+      mypi_mj_vape.6_month == 1 ~ 1,
+      mypi_mj_tinc_used.6_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.6_month) ~ 0),
+    cb_6m_mj_oils_vaped = case_when(
+      mypi_mj_oils_vaped.6_month == 1 ~ 1,
+      mypi_mj_oils_vaped.6_month == 0 ~ 0,
+      is.na(mypi_mj_oils_vaped.6_month) ~ 0),
+
+    cb_1y_mj_puff = case_when(
+      tlfb_mj_puff_l.1_year == 1 ~ 1,
+      tlfb_mj_puff_l.1_year == 0 ~ 0,
+      is.na(tlfb_mj_puff_l.1_year) ~ 0),
+    cb_1y_blunt_use = case_when(
+      tlfb_blunt_use_l.1_year == 1 ~ 1,
+      tlfb_blunt_use_l.1_year == 0 ~ 0,
+      is.na(tlfb_blunt_use_l.1_year) ~ 0),
+    cb_1y_mj_conc_use = case_when(
+      tlfb_mj_conc_use_l.1_year == 1 ~ 1,
+      tlfb_mj_conc_use_l.1_year == 0 ~ 0,
+      is.na(tlfb_mj_conc_use_l.1_year) ~ 0),
+    cb_1y_mj_drink_use = case_when(
+      tlfb_mj_drink_use_l.1_year == 1 ~ 1,
+      tlfb_mj_drink_use_l.1_year == 0 ~ 0,
+      is.na(tlfb_mj_drink_use_l.1_year) ~ 0),
+    cb_1y_tincture_use = case_when(
+      tlfb_tincture_use_l.1_year == 1 ~ 1,
+      tlfb_tincture_use_l.1_year == 0 ~ 0,
+      is.na(tlfb_tincture_use_l.1_year) ~ 0),
+
+    cb_18m_mj_used = case_when(
+      mypi_mj_used.18_month == 1 ~ 1,
+      mypi_mj_used.18_month == 0 ~ 0,
+      is.na(mypi_mj_used.18_month) ~ 0),
+    cb_18m_mj_edible = case_when(
+      mypi_mj_edible.18_month == 1 ~ 1,
+      mypi_mj_edible.18_month == 0 ~ 0,
+      is.na(mypi_mj_edible.18_month) ~ 0),
+    cb_18m_mj_oils = case_when(
+      mypi_mj_oils.18_month == 1 ~ 1,
+      mypi_mj_oils.18_month == 0 ~ 0,
+      is.na(mypi_mj_oils.18_month) ~ 0),
+    cb_18m_mj_tinc_used = case_when(
+      mypi_mj_tinc_used.18_month == 1 ~ 1,
+      mypi_mj_tinc_used.18_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.18_month) ~ 0),
+    cb_18m_mj_vape = case_when(
+      mypi_mj_vape.18_month == 1 ~ 1,
+      mypi_mj_tinc_used.18_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.18_month) ~ 0),
+    cb_18m_mj_oils_vaped = case_when(
+      mypi_mj_oils_vaped.18_month == 1 ~ 1,
+      mypi_mj_oils_vaped.18_month == 0 ~ 0,
+      is.na(mypi_mj_oils_vaped.18_month) ~ 0),
+
+    cb_2y_mj_puff = case_when(
+      tlfb_mj_puff_l.2_year == 1 ~ 1,
+      tlfb_mj_puff_l.2_year == 0 ~ 0,
+      is.na(tlfb_mj_puff_l.2_year) ~ 0),
+    cb_2y_blunt_use = case_when(
+      tlfb_blunt_use_l.2_year == 1 ~ 1,
+      tlfb_blunt_use_l.2_year == 0 ~ 0,
+      is.na(tlfb_blunt_use_l.2_year) ~ 0),
+    cb_2y_mj_conc_use = case_when(
+      tlfb_mj_conc_use_l.2_year == 1 ~ 1,
+      tlfb_mj_conc_use_l.2_year == 0 ~ 0,
+      is.na(tlfb_mj_conc_use_l.2_year) ~ 0),
+    cb_2y_mj_drink_use = case_when(
+      tlfb_mj_drink_use_l.2_year == 1 ~ 1,
+      tlfb_mj_drink_use_l.2_year == 0 ~ 0,
+      is.na(tlfb_mj_drink_use_l.2_year) ~ 0),
+    cb_2y_tincture_use = case_when(
+      tlfb_tincture_use_l.2_year == 1 ~ 1,
+      tlfb_tincture_use_l.2_year == 0 ~ 0,
+      is.na(tlfb_tincture_use_l.2_year) ~ 0)) %>% 
+  mutate(
+    cb_base = ifelse(
+      cb_base_mj_puff == 1 | cb_base_blunt_use == 1 |
+        cb_base_mj_conc_use == 1 | cb_base_mj_drink_use == 1 |
+        cb_base_tincture_use == 1, 1, 0),
+    
+    cb_6m = ifelse(
+      cb_6m_mj_used == 1 | cb_6m_mj_edible == 1 | cb_6m_mj_oils == 1 |
+        cb_6m_mj_tinc_used == 1 | cb_6m_mj_vape == 1 |
+        cb_6m_mj_oils_vaped == 1, 1, 0),
+    
+    cb_1y = ifelse(
+      cb_1y_mj_puff == 1 | cb_1y_blunt_use == 1 | 
+        cb_1y_mj_conc_use == 1 | cb_1y_mj_drink_use == 1 |
+        cb_1y_tincture_use == 1, 1, 0),
+    
+    cb_18m = ifelse(
+      cb_18m_mj_used == 1 | cb_18m_mj_edible == 1 | cb_18m_mj_oils == 1 |
+        cb_18m_mj_tinc_used == 1 | cb_18m_mj_vape == 1 |
+        cb_18m_mj_oils_vaped == 1, 1, 0),
+    
+    cb_2y = ifelse(
+      cb_2y_mj_puff == 1 | cb_2y_blunt_use == 1 |
+        cb_2y_mj_conc_use == 1 | cb_2y_mj_drink_use == 1 |
+        cb_2y_tincture_use == 1, 1, 0))
+
+table(df_sub$alc_base, useNA = 'ifany')
+table(df_sub$alc_6m, useNA = 'ifany')
+table(df_sub$alc_1y, useNA = 'ifany')
+table(df_sub$alc_18m, useNA = 'ifany')
+table(df_sub$alc_2y, useNA = 'ifany')
+
+table(df_sub$cb_base, useNA = 'ifany')
+table(df_sub$cb_6m, useNA = 'ifany')
+table(df_sub$cb_1y, useNA = 'ifany')
+table(df_sub$cb_18m, useNA = 'ifany')
+table(df_sub$cb_2y, useNA = 'ifany')
+
+write.csv(df_sub, 'output/df_sub.csv')
+write.csv(su_mid, 'output/su_mid.csv')
+write.csv(su_yr, 'output/su_yr.csv')
+
+alc_base <- table(df_sub$alc_base, useNA = 'ifany')
+capture.output(alc_base, file = 'output/alc_base.txt')
+
+alc_6m <- table(df_sub$alc_6m, useNA = 'ifany')
+capture.output(alc_6m, file = 'output/alc_6m.txt')
+
+alc_1y <- table(df_sub$alc_1y, useNA = 'ifany')
+capture.output(alc_1y, file = 'output/alc_1y.txt')
+
+alc_18m <- table(df_sub$alc_18m, useNA = 'ifany')
+capture.output(alc_18m, file = 'output/alc_18m.txt')
+
+alc_2y <- table(df_sub$alc_2y, useNA = 'ifany')
+capture.output(alc_2y, file = 'output/alc_2y.txt')
+
+cb_base <- table(df_sub$cb_base, useNA = 'ifany')
+capture.output(cb_base, file = 'output/cb_base.txt')
+
+cb_6m <- table(df_sub$cb_6m, useNA = 'ifany')
+capture.output(cb_6m, file = 'output/cb_6m.txt')
+
+cb_1y <- table(df_sub$cb_1y, useNA = 'ifany')
+capture.output(cb_1y, file = 'output/cb_1y.txt')
+
+cb_18m <- table(df_sub$cb_18m, useNA = 'ifany')
+capture.output(cb_18m, file = 'output/cb_18m.txt')
+
+cb_2y <- table(df_sub$cb_2y, useNA = 'ifany')
+capture.output(cb_2y, file = 'output/cb_2y.txt')
+
+# (2) create binary initiation variable at 30m & 3y
+
+df_sub <- df_sub %>%
+  mutate(
+    # alcohol
+    DV_alc_30m = case_when(
+      mypi_alc_sip_1b.30_month == 1 ~ 1,
+      mypi_alc_sip_1b.30_month == 0 ~ 0,
+      is.na(mypi_alc_sip_1b.30_month) ~ 0),
+    DV_alc_3y = case_when(
+      isip_1b_yn_l.3_year == 1 ~ 1,
+      isip_1b_yn_l.3_year == 0 ~ 0,
+      is.na(isip_1b_yn.3_year) ~ 0),
+    
+    # cannabis
+    cb_30m_mj_used = case_when(
+      mypi_mj_used.30_month == 1 ~ 1,
+      mypi_mj_used.30_month == 0 ~ 0,
+      is.na(mypi_mj_used.30_month) ~ 0),
+    cb_30m_mj_edible = case_when(
+      mypi_mj_edible.30_month == 1 ~ 1,
+      mypi_mj_edible.30_month == 0 ~ 0,
+      is.na(mypi_mj_edible.30_month) ~ 0),
+    cb_30m_mj_oils = case_when(
+      mypi_mj_oils.30_month == 1 ~ 1,
+      mypi_mj_oils.30_month == 0 ~ 0,
+      is.na(mypi_mj_oils.30_month) ~ 0),
+    cb_30m_mj_tinc_used = case_when(
+      mypi_mj_tinc_used.30_month == 1 ~ 1,
+      mypi_mj_tinc_used.30_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.30_month) ~ 0),
+    cb_30m_mj_vape = case_when(
+      mypi_mj_vape.30_month == 1 ~ 1,
+      mypi_mj_tinc_used.30_month == 0 ~ 0,
+      is.na(mypi_mj_tinc_used.30_month) ~ 0),
+    cb_30m_mj_oils_vaped = case_when(
+      mypi_mj_oils_vaped.30_month == 1 ~ 1,
+      mypi_mj_oils_vaped.30_month == 0 ~ 0,
+      is.na(mypi_mj_oils_vaped.30_month) ~ 0),
+      
+    cb_3y_mj_puff = case_when(
+      tlfb_mj_puff_l.3_year == 1 ~ 1,
+      tlfb_mj_puff_l.3_year == 0 ~ 0,
+      is.na(tlfb_mj_puff_l.3_year) ~ 0),
+    cb_3y_blunt_use = case_when(
+      tlfb_blunt_use_l.3_year == 1 ~ 1,
+      tlfb_blunt_use_l.3_year == 0 ~ 0,
+      is.na(tlfb_blunt_use_l.3_year) ~ 0),
+    cb_3y_mj_conc_use = case_when(  
+      tlfb_mj_conc_use_l.3_year == 1 ~ 1,
+      tlfb_mj_conc_use_l.3_year == 0 ~ 0,
+      is.na(tlfb_mj_conc_use_l.3_year) ~ 0),
+    cb_3y_mj_drink_use = case_when(
+      tlfb_mj_drink_use_l.3_year == 1 ~ 1,
+      tlfb_mj_drink_use_l.3_year == 0 ~ 0,
+      is.na(tlfb_mj_drink_use_l.3_year) ~ 0),
+    cb_3y_tincture_use = case_when(
+      tlfb_tincture_use_l.3_year == 1 ~ 1,
+      tlfb_tincture_use_l.3_year == 0 ~ 0,
+      is.na(tlfb_tincture_use_l.3_year) ~ 0),
+  
+    DV_cb_30m = ifelse(
+      cb_30m_mj_used == 1 | cb_30m_mj_edible == 1 | cb_30m_mj_oils == 1 |
+      cb_30m_mj_tinc_used == 1 | cb_30m_mj_vape == 1 |
+      cb_30m_mj_oils_vaped == 1, 1, 0),
+    DV_cb_3y = ifelse(
+      cb_3y_mj_puff == 1 | cb_3y_blunt_use == 1 |
+      cb_3y_mj_conc_use == 1 | cb_3y_mj_drink_use == 1 |
+      cb_3y_tincture_use == 1, 1, 0)) %>% 
+  mutate(
+    DV_alc = case_when(
+      alc_base == 1 | alc_6m == 1 | alc_1y == 1 | alc_18m == 1 | alc_2y == 1 ~ 'Excluded due to prior initiation',
+      DV_alc_30m == 1 | DV_alc_3y == 1 ~ 'Yes',
+      DV_alc_30m == 0 & DV_alc_3y == 0 ~ 'No'),
+    DV_alc = as.factor(DV_alc),
+    DV_cb = case_when(
+      cb_base == 1 | cb_6m == 1 | cb_1y == 1 | cb_18m == 1 | cb_2y == 1 ~ 'Excluded due to prior initiation',
+      DV_cb_30m == 1 | DV_cb_3y == 1 ~ 'Yes',
+      DV_cb_30m == 0 & DV_cb_3y == 0 ~ 'No'),
+    DV_cb = as.factor(DV_cb))
+
+table(df_sub$DV_alc_30m, useNA = 'ifany')
+table(df_sub$DV_alc_3y, useNA = 'ifany')
+table(df_sub$DV_alc, useNA = 'ifany') # n = 2196 excluded due to prior initiation
+
+
+table(df_sub$DV_cb_30m, useNA = 'ifany')
+table(df_sub$DV_cb_3y, useNA = 'ifany')
+table(df_sub$DV_cb, useNA = 'ifany') # n = 85 excluded due to prior initiation
+
+# convert final DV variables to 2-category and merge with final dataset
+
+df_sub <- df_sub %>% 
+  mutate(
+    DV_alc = case_when(
+      DV_alc == 'Excluded due to prior initiation' ~ NA,
+      DV_alc == 'Yes' ~ 1,
+      DV_alc == 'No' ~ 0),
+    DV_cb = case_when(
+      DV_cb == 'Excluded due to prior initiation' ~ NA,
+      DV_cb == 'Yes' ~ 1,
+      DV_cb == 'No' ~ 0),
+    DV_alc = as.numeric(DV_alc),
+    DV_cb = as.numeric(DV_cb)) %>% 
+  select(src_subject_id, DV_alc, DV_cb)
+
+table(df_sub$DV_alc, useNA = 'ifany')
+table(df_sub$DV_cb, useNA = 'ifany')
+
+DV_alc_table <- table(df_sub$DV_alc, useNA = 'ifany')
+capture.output(DV_alc_table, file = 'output/DV_alc_table.txt')
+
+DV_cb_table <- table(df_sub$DV_cb, useNA = 'ifany')
+capture.output(DV_cb_table, file = 'output/DV_cb_table.txt')
+
+df_final <- df_final %>% 
+  left_join(df_sub, by = 'src_subject_id')
+
+write.csv(df_sub, 'output/df_sub.csv')
+
+rm(df_sub, su_mid, su_yr, su_mid_wide, su_yr_wide)
+
+write.csv(df_final, 'output/df_final.csv')
+
+#------------------------------------------------------------------------------#
+#           Expectancy Questionnaires: Alcohol and Cannabis
+#------------------------------------------------------------------------------#
+
+# Note: must have complete data for individual items for summary score
+
+su_y_alc_exp <- read_csv('data/su_y_alc_exp.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  select(src_subject_id, aeq_positive_expectancies_ss) %>%
+  rename(
+    alc_exp = aeq_positive_expectancies_ss) %>%
+  select(src_subject_id, alc_exp)
+  
+su_y_can_exp <- read_csv('data/su_y_can_exp.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  select(src_subject_id, meeq_positive_expectancies_ss) %>%
+  rename(
+    cb_exp = meeq_positive_expectancies_ss) %>%
+  select(src_subject_id, cb_exp)
+
+# merge w/final dataset
+df_final <- df_final %>%
+  left_join(su_y_alc_exp, by = 'src_subject_id') %>%
+  left_join(su_y_can_exp, by = 'src_subject_id')
+rm(su_y_alc_exp, su_y_can_exp)
+
+#------------------------------------------------------------------------------#
+#             Perception of Harm Questionnaires: Alcohol and Cannabis
+#------------------------------------------------------------------------------#
+# Note: must have complete data for individual items for summary score
+
+su_y_percharm <- read_csv('data/su_y_percharm.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  right_join(df_final_ID, by = 'src_subject_id') %>% 
+  select(src_subject_id, phs_1_y, phs_2_y, phs_3_y, phs_9_y, phs_10_y, phs_11_y) 
+
+#--- RG Note: 
+# breakdown of number that indicated (999) = 'Don't Know' to recode to NA
+table(su_y_percharm$phs_1_y, useNA = 'ifany') 
+table(su_y_percharm$phs_2_y, useNA = 'ifany') 
+table(su_y_percharm$phs_3_y, useNA = 'ifany') 
+table(su_y_percharm$phs_9_y, useNA = 'ifany') 
+table(su_y_percharm$phs_10_y, useNA = 'ifany') 
+table(su_y_percharm$phs_11_y, useNA = 'ifany') 
+#--- RG Note: 
+
+# recode (999) to NA
+su_y_percharm <- su_y_percharm %>% 
+    mutate(
+    phs_1_y = ifelse(phs_1_y == 999, NA, phs_1_y),
+    phs_2_y = ifelse(phs_2_y == 999, NA, phs_2_y),
+    phs_3_y = ifelse(phs_3_y == 999, NA, phs_3_y),
+    phs_9_y = ifelse(phs_9_y == 999, NA, phs_9_y),
+    phs_10_y = ifelse(phs_10_y == 999, NA, phs_10_y),
+    phs_11_y = ifelse(phs_11_y == 999, NA, phs_11_y)) %>% 
+  mutate(
+    alc_per = rowSums(select(., c(phs_1_y, phs_2_y, phs_3_y)), na.rm = TRUE),
+    cb_per = rowSums(select(., c(phs_9_y, phs_10_y, phs_11_y)), na.rm = TRUE)) 
+
+#--- RG Note:
+# - summary scores (alc_per & cb_per): na.rm = TRUE indicates that summary 
+#   scores will be created ignoring values of NA (i.e., if an ID has data 
+#   present for only 1 item, summary score will reflect that 1 item and ignore
+#   missing data for other 2 items)
+# - breakdown of participants w/1, 2, or all 3 individual items complete
+su_y_percharm <- su_y_percharm %>% 
+  mutate(
+    alc_per_count = case_when(
+      is.na(phs_1_y) & is.na(phs_2_y) & is.na(phs_3_y) ~ 'Missing 3 items',
+      
+      is.na(phs_1_y) & is.na(phs_2_y) & !is.na(phs_3_y) ~ 'Missing 2 items',
+      is.na(phs_1_y) & !is.na(phs_2_y) & is.na(phs_3_y) ~ 'Missing 2 items',
+      !is.na(phs_1_y) & is.na(phs_2_y) & is.na(phs_3_y) ~ 'Missing 2 items',
+      
+      is.na(phs_1_y) & !is.na(phs_2_y) & !is.na(phs_3_y) ~ 'Missing 1 item',
+      !is.na(phs_1_y) & is.na(phs_2_y) & !is.na(phs_3_y) ~ 'Missing 1 item',
+      !is.na(phs_1_y) & !is.na(phs_2_y) & is.na(phs_3_y) ~ 'Missing 1 item',
+      
+      !is.na(phs_1_y) & !is.na(phs_2_y) & !is.na(phs_3_y) ~ 'Missing 0 items'),
+    
+    cb_per_count = case_when(
+      is.na(phs_9_y) & is.na(phs_10_y) & is.na(phs_11_y) ~ 'Missing 3 items',
+      
+      is.na(phs_9_y) & is.na(phs_10_y) & !is.na(phs_11_y) ~ 'Missing 2 items',
+      is.na(phs_9_y) & !is.na(phs_10_y) & is.na(phs_11_y) ~ 'Missing 2 items',
+      !is.na(phs_9_y) & is.na(phs_10_y) & is.na(phs_11_y) ~ 'Missing 2 items',
+      
+      is.na(phs_9_y) & !is.na(phs_10_y) & !is.na(phs_11_y) ~ 'Missing 1 item',
+      !is.na(phs_9_y) & is.na(phs_10_y) & !is.na(phs_11_y) ~ 'Missing 1 item',
+      !is.na(phs_9_y) & !is.na(phs_10_y) & is.na(phs_11_y) ~ 'Missing 1 item',
+      
+      !is.na(phs_9_y) & !is.na(phs_10_y) & !is.na(phs_11_y) ~ 'Missing 0 items'))
+
+table(su_y_percharm$alc_per_count, useNA = 'ifany')
+# Missing 0 items  Missing 1 item Missing 2 items Missing 3 items 
+#            8222             344              69              78 
+
+harm_alc_count <- table(su_y_percharm$alc_per_count, useNA = 'ifany')
+capture.output(harm_alc_count, file = 'output/harm_alc_count.txt')
+
+table(su_y_percharm$cb_per_count, useNA = 'ifany')
+# Missing 0 items  Missing 1 item Missing 2 items Missing 3 items 
+#            7757             171              55             730 
+
+harm_cb_count <- table(su_y_percharm$cb_per_count, useNA = 'ifany')
+capture.output(harm_cb_count, file = 'output/harm_cb_count.txt')
+
+# confirm currently no missing data for either summary score
+describe(su_y_percharm$alc_per) # (NA) = 0
+describe(su_y_percharm$cb_per) # (NA) = 0
+
+# update summary score: if missing all 3 items, change summary score of 0 to NA
+su_y_percharm <- su_y_percharm %>% 
+  mutate(
+    alc_per = ifelse(alc_per_count == 'Missing 3 items', NA, alc_per),
+    cb_per = ifelse(cb_per_count == 'Missing 3 items', NA, cb_per))
+
+# confirm missing data present fpr those who were missing all 3 items
+describe(su_y_percharm$alc_per) # (NA) = 78
+describe(su_y_percharm$cb_per) # (NA) = 730
+
+#--- RG Note:
+
+# merge w/final dataset
+su_y_percharm <- su_y_percharm %>% 
+  select(src_subject_id, alc_per, cb_per)
+
+df_final <- df_final %>%
+  left_join(su_y_percharm, by = 'src_subject_id')
+
+rm(su_y_percharm)
+
+#------------------------------------------------------------------------------#
+#           Longitudinal Tracking: Baseline Age, Site ID, Family ID
+#------------------------------------------------------------------------------#
+
+abcd_y_lt <- read_csv('data/abcd_y_lt.csv') %>%
+  subset(eventname == 'baseline_year_1_arm_1') %>%
+  mutate(age_baseline = interview_age/12) %>% # convert age in months to years
+  select(src_subject_id, age_baseline, site_id_l, rel_family_id)
+abcd_y_lt$age_baseline <- round(abcd_y_lt$age_baseline, digits = 0)
+
+# merge w/final dataset
+df_final <- df_final %>%
+  left_join(abcd_y_lt, by = 'src_subject_id')
+
+rm(abcd_y_lt)
+  
+#------------------------------------------------------------------------------#
+#                       Parent Demographics Survey 
+#------------------------------------------------------------------------------#
+
+abcd_p_demo <- read_csv('data/abcd_p_demo.csv') %>%
+  subset (eventname == 'baseline_year_1_arm_1') %>%
+  right_join(df_final_ID, by = 'src_subject_id') %>% 
+  select(src_subject_id, demo_sex_v2, demo_comb_income_v2,
+         demo_race_a_p___10:demo_race_a_p___25, demo_race_a_p___0,
+         demo_race_a_p___77, demo_race_a_p___99,
+         demo_ethn_v2) %>%
+  mutate(
+    sex = factor(demo_sex_v2,
+                 levels = c(1,2,3,4),
+                 labels = c('Male', 'Female',
+                            'Intersex-Male', 'Intersex-Female')),
+    eth_hisp = factor(demo_ethn_v2,
+                      levels = c(1,2),
+                      labels = c('Hispanic', 'non-Hispanic')),
+    income = factor(demo_comb_income_v2,
+                    levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+                    labels = c('inc_1', 'inc_2', 'inc_3', 'inc_4', 'inc_5',
+                               'inc_6', 'inc_7', 'inc_8', 'inc_9', 'inc_10')))
+table(abcd_p_demo$sex)
+table(abcd_p_demo$eth_hisp)
+table(abcd_p_demo$income)
+
+levels(abcd_p_demo$sex)
+levels(abcd_p_demo$eth_hisp)
+levels(abcd_p_demo$income)
+
+#--- RG Note:
+# for variables recoded, number of (777) or (999)
+table(abcd_p_demo$demo_sex_v2, useNA = 'ifany') 
+table(abcd_p_demo$demo_comb_income_v2, useNA = 'ifany') 
+table(abcd_p_demo$demo_ethn_v2, useNA = 'ifany')
+#--- RG Note:
+
+# recode values of (777) Refuse to Answer and (999) as NA
+abcd_p_demo <- abcd_p_demo %>%
+  mutate(
+    across(.cols = ends_with('_v2'),
+           .fns = ~replace(.x, .x %in% c(999, 777), NA)))
+
+# create summary race variables
+abcd_p_demo <- abcd_p_demo %>%
+  mutate(
+    White = ifelse(demo_race_a_p___10 == 1, 1, 0),
+    Black = ifelse(demo_race_a_p___11 == 1, 1, 0),
+    Asian = ifelse(demo_race_a_p___18 == 1 | demo_race_a_p___19 == 1 |
+                     demo_race_a_p___20 == 1 | demo_race_a_p___21 == 1 |
+                     demo_race_a_p___22 == 1 | demo_race_a_p___23 == 1 |
+                     demo_race_a_p___24 == 1, 1, 0),
+    AIAN = ifelse( #AIAN: American Indian Alaskan Native
+      demo_race_a_p___12 == 1 | demo_race_a_p___13 == 1, 1, 0),
+    NHPI = ifelse( #NHPI: Native Hawaiian and Other Pacific
+      demo_race_a_p___14 == 1 | demo_race_a_p___15 == 1 |
+        demo_race_a_p___16 == 1 | demo_race_a_p___17, 1, 0),
+    Other = ifelse(demo_race_a_p___25 == 1 | demo_race_a_p___0 == 1, 1, 0)) %>%
+  mutate(
+    MultiRacial = ifelse(
+      (White + Black + Asian + AIAN + NHPI + Other) > 1, 1, 0)) %>%
+  mutate(
+    race_4l = case_when(
+      White == 1 & (Black == 0 & Asian == 0 & AIAN == 0 & NHPI == 0 & Other == 0
+                    & MultiRacial == 0) ~ 'White', 
+      Black == 1 & (White == 0 & Asian == 0 & AIAN == 0 & NHPI == 0 & Other == 0
+                    & MultiRacial == 0) ~ 'Black',
+      Asian == 1 & (White == 0 & Black == 0 & AIAN == 0 & NHPI == 0 & Other == 0
+                    & MultiRacial == 0) ~ 'Asian',
+      AIAN == 1 | NHPI == 1 | Other == 1 | MultiRacial == 1 ~
+        'Other/MultiRacial'),
+    race_4l = factor(race_4l))
+
+# subset relevant variables
+abcd_p_demo <- abcd_p_demo %>%
+  select(src_subject_id, sex, race_4l, eth_hisp, income)
+
+# re-code 2IDs from intersex male to male
+table(abcd_p_demo$sex, useNA = 'ifany')
+
+abcd_p_demo <- abcd_p_demo %>%
+  mutate(
+    sex = case_when(
+    sex == 'Intersex-Male' ~ 'Male',
+    sex == 'Male' ~ 'Male',
+    sex == 'Female' ~ 'Female')) %>%
+  mutate(sex = as.factor(sex))
+  
+# merge w/final dataset 
+df_final <- df_final %>%
+  left_join(abcd_p_demo, by = 'src_subject_id')
+rm(abcd_p_demo)
+
+# age
+concordance_age <- read_csv('data/su_y_sui.csv') %>%
+  subset(eventname == '2_year_follow_up_y_arm_1') %>%
+  select(src_subject_id, tlfb_age_l, tlfb_age_calc_inmonths_l)
+
+# merge w/final dataset 
+df_final <- df_final %>%
+  left_join(concordance_age, by = 'src_subject_id')
+rm(concordance_age)
+
+#------------------------------------------------------------------------------#
+#                    Developmental History Questionnaire                       #
+#------------------------------------------------------------------------------#
+
+ph_p_dhx <- read_csv('data/ph_p_dhx.csv') %>%
+  subset (eventname == 'baseline_year_1_arm_1') %>%
+  right_join(df_final_ID, by = 'src_subject_id') %>% 
+  select(src_subject_id,
+         devhx_8_alcohol, devhx_8_tobacco, devhx_8_marijuana,
+         devhx_8_coc_crack, devhx_8_her_morph, devhx_8_oxycont,
+         devhx_8_other_drugs,
+         devhx_9_alcohol, devhx_9_tobacco, devhx_9_marijuana,
+         devhx_9_coc_crack, devhx_9_her_morph, devhx_9_oxycont,
+         devhx_9_other_drugs)
+
+#--- RG NOTE: 
+# - breakdown of values to be recoded
+table(ph_p_dhx$devhx_8_alcohol, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_tobacco, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_marijuana, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_coc_crack, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_her_morph, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_oxycont, useNA = 'ifany') 
+table(ph_p_dhx$devhx_8_other_drugs, useNA = 'ifany') 
+
+table(ph_p_dhx$devhx_9_alcohol, useNA = 'ifany') 
+table(ph_p_dhx$devhx_9_tobacco, useNA = 'ifany') 
+table(ph_p_dhx$devhx_9_marijuana, useNA = 'ifany')
+table(ph_p_dhx$devhx_9_coc_crack, useNA = 'ifany') 
+table(ph_p_dhx$devhx_9_her_morph, useNA = 'ifany') 
+table(ph_p_dhx$devhx_9_oxycont, useNA = 'ifany') 
+table(ph_p_dhx$devhx_9_other_drugs, useNA = 'ifany') 
+#--- RG NOTE: 
+
+# re-code values of 999 to NA
+ph_p_dhx <- ph_p_dhx %>%
+  mutate(
+    across(.cols = starts_with('devhx_8') | starts_with('devhx_9'),
+           .fns = ~replace(.x, .x %in% c(999), NA)))
+
+# count NA across all vars
+ph_p_dhx$count_na_dhx <- rowSums(is.na(select(ph_p_dhx, 
+                                              starts_with('devhx_8') |
+                                                starts_with('devhx_9'))))
+
+# create binary substance exposure variable
+# note: if missing data on all 14 variables, coded as NA otherwise using data
+# present to create exposure variable
+ph_p_dhx <- ph_p_dhx %>%
+  mutate(exp_sub = rowSums((select(
+    ph_p_dhx, starts_with('devhx_8') | starts_with('devhx_9'))),
+    na.rm = TRUE),
+    exp_sub = ifelse(exp_sub == 0, 0, 1),
+    exp_sub = ifelse(count_na_dhx == 14, NA, exp_sub),
+    exp_sub = factor(exp_sub,
+                     levels = c(0, 1),
+                     labels = c('No', 'Yes')))
+
+# subset to relevant variables
+ph_p_dhx <- ph_p_dhx %>%
+  select(src_subject_id, exp_sub)
+
+# merge w/final dataset
+df_final <- df_final %>%
+  left_join(ph_p_dhx, by = 'src_subject_id')
+rm(ph_p_dhx)
+
+#------------------------------------------------------------------------------#
+#                     Family History Questionnaire 
+#------------------------------------------------------------------------------#
+mh_p_fhx <- read_csv('data/mh_p_fhx.csv') %>%
+  subset (eventname == 'baseline_year_1_arm_1') %>%
+  right_join(df_final_ID, by = 'src_subject_id') %>% 
+  select(src_subject_id,
+         famhx_ss_fath_prob_alc_p, famhx_ss_patgf_prob_alc_p,
+         famhx_ss_patgm_prob_alc_p, famhx_ss_moth_prob_alc_p,
+         famhx_ss_matgf_prob_alc_p, famhx_ss_matgm_prob_alc_p,
+         famhx_ss_fath_prob_dg_p, famhx_ss_patgf_prob_dg_p,
+         famhx_ss_patgm_prob_dg_p, famhx_ss_moth_prob_dg_p,
+         famhx_ss_matgf_prob_dg_p, famhx_ss_matgm_prob_dg_p)
+
+# create values for each family member
+mh_p_fhx<- mh_p_fhx %>%
+  mutate(
+    across(.cols = starts_with('famhx_ss_moth_prob') |
+             starts_with('famhx_ss_fath_prob'),
+           .fns = ~replace(.x, .x == 1, .50))) %>%
+  mutate(
+    across(.cols = starts_with('famhx_ss_matg') |
+             starts_with('famhx_ss_patg'),
+           .fns = ~replace(.x, .x == 1, .25)))
+
+# count number missing
+mh_p_fhx$count_na_fhx <- rowSums(is.na(select(mh_p_fhx, starts_with('famhx'))))
+
+# create density score
+mh_p_fhx$mh_density <- rowSums(
+  (select(mh_p_fhx, starts_with('famhx'))), na.rm = TRUE)
+
+# if missing all variables used in density score, code as NA
+mh_p_fhx <- mh_p_fhx %>%
+  mutate(mh_density = ifelse(count_na_fhx == 12, NA, mh_density))
+
+# subset to relevant variables
+mh_p_fhx <- mh_p_fhx %>%
+  select(src_subject_id, mh_density)
+
+# merge w/final dataset
+df_final <- df_final %>%
+  left_join(mh_p_fhx, by = 'src_subject_id')
+rm(mh_p_fhx)
+
+#------------------------------------------------------------------------------#
+#               Child Behavior Checklist Scores (CBCL)
+#------------------------------------------------------------------------------#
+
+mh_p_cbcl<- read_csv('data/mh_p_cbcl.csv') %>%
+  subset (eventname == 'baseline_year_1_arm_1') %>%
+  select(src_subject_id, cbcl_scr_syn_totprob_r, cbcl_scr_syn_internal_r, 
+         cbcl_scr_syn_external_r)
+
+# merge w/final dataset
+df_final <- df_final %>%
+  left_join(mh_p_cbcl, by = 'src_subject_id')
+rm(mh_p_cbcl)
+
+#------------------------------------------------------------------------------#
+#                           Finalize Datasets
+#------------------------------------------------------------------------------#
+
+# check breakdown of outcomes for each model
+describe(df_final$DV_alc) # n = 6517
+describe(df_final$DV_cb) # n = 8628
+describe(df_final$alc_exp) # n = 8709
+describe(df_final$cb_exp) # n = 8159
+describe(df_final$alc_per) # n = 8635
+describe(df_final$cb_per) # n = 7893
+#--- RG NOTE:
+# - updated n above based on RG updates
+#--- RG NOTE:
+
+# check variable type
+str(df_final)
+
+# breakdown of missing data
+obs_NA_factor <- df_final %>%
+  select_if(~ any(is.na(.))) %>%
+  select_if( ~ is.factor(.))
+
+obs_NA_numeric <- df_final %>%
+  select_if(~ any(is.na(.))) %>%
+  select_if(~is.numeric(.))
+
+obs_NA_factor <- obs_NA_factor %>%
+  Desc(., plotit = FALSE)
+capture.output(obs_NA_factor, file = 'output/obs_NA_factor.txt')
+
+obs_NA_numeric <- obs_NA_numeric %>%
+  Desc(., plotit = FALSE)
+capture.output(obs_NA_numeric, file = 'output/obs_NA_numeric.txt')
+
+rm(obs_NA_factor, obs_NA_numeric)
+
+# check sample sizes for complete cases
+#--- RG NOTE:
+# - subset dataset to only include predictors, covariates, and outcomes
+df_final_sub <- df_final %>% 
+  select(
+    # outcome
+    DV_alc, DV_cb, alc_exp, cb_exp, alc_per, cb_per, 
+    # predictors
+    cc_cb, cc_alc,
+    # covariates
+    tlfb_age_l, sex, race_4l, eth_hisp, income, exp_sub, mh_density, 
+    cbcl_scr_syn_external_r, cbcl_scr_syn_internal_r)
+#--- RG NOTE:
+
+df_final_cc <- df_final_sub[complete.cases(df_final_sub), ] # n = 4206
+
+write.csv(df_final_cc, 'output/df_final_cc.csv')
+write.csv(df_final_sub, 'output/df_final_sub.csv')
+
+rm(df_final_cc, df_final_sub)
+
+```
+
+
+## MICE
+
+
+```{r eval = FALSE}
+#------------------------------------------------------------------------------#
+#                     Multiple Imputation: MICE
+#------------------------------------------------------------------------------#
+
+## Configure parallelization
+## Detect core count
+nCores <- min(parallel::detectCores())
+
+#--- RG NOTE:
+# - previous syntax below
+# nCores <- min(parallel::detectCores(), 8)
+# - minor update to not set cores to 8, but allow more or less cores to be
+#   used depending on computer
+#--- RG NOTE:
+
+## Used by parallel::mclapply() as default
+options(mc.cores = nCores)
+
+## Used by doParallel as default
+options(cores = nCores)
+
+## Register doParallel as the parallel backend with foreach
+doParallel::registerDoParallel(cores = nCores)
+
+## Report multicore use
+cat("### Using", foreach::getDoParWorkers(), "cores\n")
+cat("### Using", foreach::getDoParName(), "as backend\n")
+cat("
+    ###
+    ### Missing data imputation with mice
+    ########################################################################\n")
+
+## Create a before-MI dataset
+df_final_before <- df_final
+
+## Extract all variable names in dataset
+allVars <- names(df_final_before)
+
+## names of variables with missingness
+missVars <- names(df_final_before)[colSums(is.na(df_final_before)) > 0]
+
+## mice predictorMatrix
+predictorMatrix <- matrix(0, ncol = length(allVars),
+                          nrow = length(allVars))
+rownames(predictorMatrix) <- allVars
+colnames(predictorMatrix) <- allVars
+
+## Avoid perfect linear dependence
+cat("
+    ### Specify Variables informing imputation\n")
+
+## These can be either complete variables or variables with missingness.
+## Those with missingness must be imputed.
+## Explicitly specify.
+imputerVars <- c('age_baseline', 'sex', 'race_4l', 'eth_hisp', 'income')
+
+## Keep variables that actually exist in dataset
+imputerVars <- intersect(unique(imputerVars), allVars)
+imputerVars
+imputerMatrix <- predictorMatrix
+imputerMatrix[,imputerVars] <- 1
+imputerMatrix
+cat("
+    ### Specify variables with missingness to be imputed \n")
+
+imputedOnlyVars <- c(
+  'tlfb_age_l', 'race_4l', 'eth_hisp', 'income', 'exp_sub', 'mh_density', 
+  'cbcl_scr_syn_totprob_r', 'cbcl_scr_syn_internal_r', 
+  'cbcl_scr_syn_external_r')
+
+## imputers that have missingness must be imputed.
+imputedVars <- intersect(unique(c(imputedOnlyVars, imputerVars)), missVars)
+imputedVars
+imputedMatrix <- predictorMatrix
+imputedMatrix[imputedVars,] <- 1
+imputedMatrix
+
+cat("
+    ### Construct a full predictor matrix
+    ### (rows: imputed variables; cols: imputer variables)\n")
+
+## keep correct imputer-imputed pairs only
+predictorMatrix <- imputerMatrix * imputedMatrix
+## diagonals must be zeros (a variable cannot impute itself)
+diag(predictorMatrix) <- 0
+predictorMatrix
+
+cat("
+### Dry-run mice for imputation methods\n")
+dryMice <- mice(data = df_final_before, m = 1,
+                predictorMatrix = predictorMatrix, maxit = 0)
+
+## update predictor matrix
+predictorMatrix <- dryMice$predictorMatrix
+cat("### Imputers (non-zero columns of predictorMatrix)\n")
+imputerVars <- colnames(predictorMatrix)[colSums(predictorMatrix) > 0]
+imputerVars
+cat("### Imputed (non-zero rows of predictorMatrix)\n")
+imputedVars <- rownames(predictorMatrix)[rowSums(predictorMatrix) > 0]
+imputedVars
+cat("### Imputers that are complete\n")
+setdiff(imputerVars, imputedVars)
+cat("### Imputers with missingness\n")
+intersect(imputerVars, imputedVars)
+cat("### Imputed-only variables without being imputers\n")
+setdiff(imputedVars, imputerVars)
+cat("### Variables with missingness that are not imputed\n")
+setdiff(missVars, imputedVars)
+cat("### Relevant part of predictorMatrix\n")
+predictorMatrix[rowSums(predictorMatrix) > 0, colSums(predictorMatrix) > 0]
+
+dryMice$method[setdiff(allVars, imputedVars)] <- ""
+cat("### Methods used for imputation\n")
+# output methods used for each variable
+methods <- dryMice$method[sapply(dryMice$method, nchar) > 0]
+capture.output(methods, file = 'output/methods.txt')
+
+cat("
+    ### Run mice\n")
+M <- 5
+cat("### Imputing", M, "times\n")
+## set seed for reproducibility
+set.seed(29403)
+
+## parallelized execution
+miceout <- foreach(i = seq_len(M), .combine = ibind) %dorng% {
+  cat("### Started iteration", i, "\n")
+  miceout <- mice::mice(
+    data = df_final_before, m = 1,
+    print = TRUE, predictorMatrix = predictorMatrix,
+    method = dryMice$method, maxit = 20)
+  cat("### Completed iteration", i, "\n")
+  ## Make sure to return the output
+  miceout
+}
+
+logged_events <- miceout$loggedEvents
+logged_events # NULL
+rm(logged_events)
+
+cat("
+    ### Show mice results\n")
+## mice object ifself
+miceout
+## variables that no longer have missingness after imputation
+cat("
+    ### Variables actually imputed\n")
+actuallyImputedVars <-
+  setdiff(names(df_final_before)[colSums(is.na(df_final_before)) > 0],
+          names(mice::complete(miceout, action = 1))
+          [colSums(is.na(mice::complete(miceout, action = 1))) > 0])
+actuallyImputedVars
+## examine discrepancies
+cat("### Variables that were unexpectedly imputed\n")
+setdiff(actuallyImputedVars, imputedVars)
+cat("### Variables that were planned for MI but not imputed\n")
+setdiff(imputedVars, actuallyImputedVars)
+```
+
+
+## Prep final dataset for models
+
+
+```{r eval = FALSE}
+
+#--- RG NOTE:
+# - packages for mixed models will only use data available, so you don't have 
+#   to create separate mids objects for each outcome 
+
+# convert mids object into dataframe
+mice_df_final <-mice::complete(miceout, "long", include = TRUE)
+table(mice_df_final$.imp)
+ 
+mice_df_final$cc_alc <- relevel(mice_df_final$cc_alc, 
+                                ref = 'Concordance Limited A')
+mice_df_final$cc_cb <-relevel(mice_df_final$cc_cb, 
+                              ref = 'Concordance Limited C')
+
+mice_df_final$sex <- relevel(mice_df_final$sex, ref = 'Male')
+mice_df_final$race_4l <- relevel(mice_df_final$race_4l, ref = 'White')
+mice_df_final$eth_hisp <- relevel(mice_df_final$eth_hisp, ref = 'non-Hispanic')
+mice_df_final$income <- relevel(mice_df_final$income, ref = 'inc_9')
+mice_df_final$exp_sub <- relevel(mice_df_final$exp_sub, ref = 'No')
+
+# save as mids object
+mids_df_final <- as.mids(mice_df_final)
+
+write.csv(mice_df_final, 'output/mice_df_final.csv')
+write.csv(df_final_before, 'output/df_final_before.csv')
+
+rm(
+   actuallyImputedVars, allVars, imputedOnlyVars, imputedVars, imputerVars,
+   M, methods, missVars, predictorMatrix, imputedMatrix, imputerMatrix, dryMice)
+
+#--- RG NOTE:
+
+# CM original syntax below 
+
+# # convert mids object into dataframe
+# mice_df_final <-mice::complete(miceout, "long", include = TRUE)
+# table(mice_df_final$.imp)
+# 
+# # alcohol initiation:
+# # - complete data on alcohol initiation
+# mice_df_alc <- mice_df_final %>%
+#   subset(!is.na(DV_alc))
+# table(mice_df_alc$DV_alc, useNA = 'ifany')
+# table(mice_df_alc$.imp, useNA = 'ifany')
+# 
+# # cannabis initiation:
+# # - complete data on alcohol initiation
+# mice_df_cb <- mice_df_final %>%
+#   subset(!is.na(DV_cb))
+# table(mice_df_cb$DV_cb, useNA = 'ifany')
+# table(mice_df_cb$.imp, useNA = 'ifany')
+# 
+# # set reference group
+# mice_df_alc$cc_alc <- relevel(factor(mice_df_alc$cc_alc), ref = 'Concordance Limited A')
+# mice_df_final$cc_alc <- relevel(factor(mice_df_final$cc_alc), ref = 'Concordance Limited A')
+# 
+# mice_df_cb$cc_cb <-relevel(factor(mice_df_cb$cc_cb), ref = 'Concordance Limited C')
+# mice_df_final$cc_cb <-relevel(factor(mice_df_final$cc_cb), ref = 'Concordance Limited C')
+# 
+# mice_df_alc$sex <- relevel(mice_df_alc$sex, ref = 'Male')
+# mice_df_cb$sex <- relevel(mice_df_cb$sex, ref = 'Male')
+# mice_df_final$sex <- relevel(mice_df_final$sex, ref = 'Male')
+# 
+# mice_df_alc$race_4l <- relevel(mice_df_alc$race_4l, ref = 'White')
+# mice_df_cb$race_4l <- relevel(mice_df_cb$race_4l, ref = 'White')
+# mice_df_final$race_4l <- relevel(mice_df_final$race_4l, ref = 'White')
+# 
+# mice_df_alc$eth_hisp <- relevel(mice_df_alc$eth_hisp, ref = 'non-Hispanic')
+# mice_df_cb$eth_hisp <- relevel(mice_df_cb$eth_hisp, ref = 'non-Hispanic')
+# mice_df_final$eth_hisp <- relevel(mice_df_final$eth_hisp, ref = 'non-Hispanic')
+# 
+# mice_df_alc$income <- relevel(mice_df_alc$income, ref = 'inc_9')
+# mice_df_cb$income <- relevel(mice_df_cb$income, ref = 'inc_9')
+# mice_df_final$income <- relevel(mice_df_final$income, ref = 'inc_9')
+# 
+# mice_df_alc$exp_sub <- relevel(mice_df_alc$exp_sub, ref = 'No')
+# mice_df_cb$exp_sub <- relevel(mice_df_cb$exp_sub, ref = 'No')
+# mice_df_final$exp_sub <- relevel(mice_df_final$exp_sub, ref = 'No')
+# 
+# # save as mids object
+# mids_alc <- as.mids(mice_df_alc)
+# mids_cb <- as.mids(mice_df_cb)
+# mids_df_final <- as.mids(mice_df_final)
+# 
+# rm(mice_df_alc, mice_df_cb, mice_df_final,
+#    actuallyImputedVars, allVars, imputedOnlyVars, imputedVars, imputerVars,
+#    M, methods, missVars, predictorMatrix, imputedMatrix, imputerMatrix, dryMice,
+#    df_final_before)
+
+```
+
+
+# Sample Characteristics
+
+
+```{r eval = FALSE}
+
+# items for figure
+# - mean and SD of expectancies questionnaire in each group
+
+# outcome: expectancies
+
+fig_alc_exp <- df_final %>%
+  group_by(cc_alc) %>%
+  select(cc_alc, alc_exp) %>%
+  summarise(
+    alc_exp_mean = mean(alc_exp, na.rm = TRUE),
+    alc_exp_sd = sd(alc_exp, na.rm = TRUE),
+    alc_exp_min = min(alc_exp, na.rm = TRUE),
+    alc_exp_max = max(alc_exp, na.rm = TRUE))
+
+write.csv(fig_alc_exp,'output/fig_alc_exp.csv')
+rm(fig_alc_exp)
+
+fig_cb_exp <- df_final %>%
+  group_by(cc_cb) %>%
+  select(cc_cb, cb_exp) %>%
+  summarise(
+    cb_exp_mean = mean(cb_exp, na.rm = TRUE),
+    cb_exp_sd = sd(cb_exp, na.rm = TRUE),
+    cb_exp_min = min(cb_exp, na.rm = TRUE),
+    cb_exp_max = max(cb_exp, na.rm = TRUE))
+
+write.csv(fig_cb_exp,'output/fig_cb_exp.csv')
+rm(fig_cb_exp)
+
+# outcome: perception
+
+fig_alc_perc <- df_final %>%
+  group_by(cc_alc) %>%
+  select(cc_alc, alc_per) %>%
+  summarise(
+    alc_per_mean = mean(alc_per, na.rm = TRUE),
+    alc_per_sd = sd(alc_per, na.rm = TRUE),
+    alc_per_min = min(alc_per, na.rm = TRUE),
+    alc_per_max = max(alc_per, na.rm = TRUE))
+
+write.csv(fig_alc_perc,'output/fig_alc_perc.csv')
+rm(fig_alc_perc)
+
+fig_cb_perc <- df_final %>%
+  group_by(cc_cb) %>%
+  select(cc_cb, cb_per) %>%
+  summarise(
+    cb_per_mean = mean(cb_per, na.rm = TRUE),
+    cb_per_sd = sd(cb_per, na.rm = TRUE),
+    cb_per_min = min(cb_per, na.rm = TRUE),
+    cb_per_max = max(cb_per, na.rm = TRUE))
+
+write.csv(fig_cb_perc,'output/fig_cb_perc.csv')
+rm(fig_cb_perc)
+
+# outcome: initiation
+DV_alc_freq <- table(df_final$DV_alc, useNA = 'ifany')
+DV_alc_prop <- prop.table(table(df_final$DV_alc, useNA = 'ifany'))
+DV_alc <- cbind(DV_alc_freq, DV_alc_prop)
+capture.output(DV_alc, file = 'output/DV_alc.txt')
+rm(DV_alc_freq, DV_alc_prop, DV_alc)
+
+DV_cb_freq <- table(df_final$DV_cb, useNA = 'ifany')
+DV_cb_prop <- prop.table(table(df_final$DV_cb, useNA = 'ifany'))
+DV_cb <- cbind(DV_cb_freq, DV_cb_prop)
+capture.output(DV_cb, file = 'output/DV_cb.txt')
+rm(DV_cb_freq, DV_cb_prop, DV_cb)
+
+# factor substance use
+obs_factor_alc <- df_final %>%
+  gather(variable, value, cc_alc) %>%
+  group_by(variable, value) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n) * 100) %>%
+  mutate(freq = round(freq, digits = 2))
+write.csv(obs_factor_alc,'output/obs_factor_alc.csv')
+rm(obs_factor_alc)
+
+obs_factor_cb <- df_final %>%
+  gather(variable, value, cc_cb) %>%
+  group_by(variable, value) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n) * 100) %>%
+  mutate(freq = round(freq, digits = 2))
+write.csv(obs_factor_cb,'output/obs_factor_cb.csv')
+rm(obs_factor_cb)
+
+# - proportion of SU initiation within each group
+fig_alcYN_freq <- table(
+  df_final$cc_alc, df_final$DV_alc, useNA = 'ifany')
+fig_alcYN_prop <- prop.table(table(
+  df_final$cc_alc, df_final$DV_alc, useNA = 'ifany'))
+capture.output(fig_alcYN_freq, file = 'output/fig_alcYN_freq.txt')
+capture.output(fig_alcYN_prop, file = 'output/fig_alcYN_prop.txt')
+rm(fig_alcYN_freq, fig_alcYN_prop)
+
+fig_cbYN_freq <- table(
+  df_final$cc_cb, df_final$DV_cb, useNA = 'ifany')
+fig_cbYN_prop <- prop.table(table(
+  df_final$cc_cb, df_final$DV_cb, useNA = 'ifany'))
+capture.output(fig_cbYN_freq, file = 'output/fig_cbYN_freq.txt')
+capture.output(fig_cbYN_prop, file = 'output/fig_cbYN_prop.txt')
+rm(fig_cbYN_freq, fig_cbYN_prop)
+
+# numeric full sample
+obs_num_all <- get_summary_stats(df_final, type = "common") %>%
+  select(variable, n, mean, sd, min, max)
+write.csv(obs_num_all,'output/obs_num_all.csv')
+rm(obs_num_all)
+
+# factor full sample
+obs_factor_all <- df_final %>%
+  gather(variable, value, sex, race_4l, eth_hisp, income, exp_sub, mh_density, 
+         cc_alc, cc_cb) %>%
+  group_by(variable, value) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n) * 100) %>%
+  mutate(freq = round(freq, digits = 2))
+write.csv(obs_factor_all,'output/obs_factor_all.csv')
+rm(obs_factor_all)
+
+# - proportion of sex within each group
+fig_alc_sex_freq <- table(
+  df_final$cc_alc, df_final$sex, useNA = 'ifany')
+fig_alc_sex_prop <- prop.table(table(
+  df_final$cc_alc, df_final$sex, useNA = 'ifany'))
+capture.output(fig_alc_sex_freq, file = 'output/fig_alc_sex_freq.txt')
+capture.output(fig_alc_sex_prop, file = 'output/fig_alc_sex_prop.txt')
+rm(fig_alc_sex_freq, fig_alc_sex_prop)
+
+fig_cb_sex_freq <- table(
+  df_final$cc_cb, df_final$sex, useNA = 'ifany')
+fig_cb_sex_prop <- prop.table(table(
+  df_final$cc_cb, df_final$sex, useNA = 'ifany'))
+capture.output(fig_cb_sex_freq, file = 'output/fig_cb_sex_freq.txt')
+capture.output(fig_cb_sex_prop, file = 'output/fig_cb_sex_prop.txt')
+rm(fig_cb_sex_freq, fig_cb_sex_prop)
+
+# - proportion of race within each group
+fig_alc_race_freq <- table(
+  df_final$cc_alc, df_final$race_4l, useNA = 'ifany')
+fig_alc_race_prop <- prop.table(table(
+  df_final$cc_alc, df_final$race_4l, useNA = 'ifany'))
+capture.output(fig_alc_race_freq, file = 'output/fig_alc_race_freq.txt')
+capture.output(fig_alc_race_prop, file = 'output/fig_alc_race_prop.txt')
+rm(fig_alc_race_freq, fig_alc_race_prop)
+
+fig_cb_race_freq <- table(
+  df_final$cc_cb, df_final$race_4l, useNA = 'ifany')
+fig_cb_race_prop <- prop.table(table(
+  df_final$cc_cb, df_final$race_4l, useNA = 'ifany'))
+capture.output(fig_cb_race_freq, file = 'output/fig_cb_race_freq.txt')
+capture.output(fig_cb_race_prop, file = 'output/fig_cb_race_prop.txt')
+rm(fig_cb_race_freq, fig_cb_race_prop)
+
+# - proportion of ethnicity within each group
+fig_alc_ethn_freq <- table(
+  df_final$cc_alc, df_final$eth_hisp, useNA = 'ifany')
+fig_alc_ethn_prop <- prop.table(table(
+  df_final$cc_alc, df_final$eth_hisp, useNA = 'ifany'))
+capture.output(fig_alc_ethn_freq, file = 'output/fig_alc_ethn_freq.txt')
+capture.output(fig_alc_ethn_prop, file = 'output/fig_alc_ethn_prop.txt')
+rm(fig_alc_ethn_freq, fig_alc_ethn_prop)
+
+fig_cb_ethn_freq <- table(
+  df_final$cc_cb, df_final$eth_hisp, useNA = 'ifany')
+fig_cb_ethn_prop <- prop.table(table(
+  df_final$cc_cb, df_final$eth_hisp, useNA = 'ifany'))
+capture.output(fig_cb_ethn_freq, file = 'output/fig_cb_ethn_freq.txt')
+capture.output(fig_cb_ethn_prop, file = 'output/fig_cb_ethn_prop.txt')
+rm(fig_cb_ethn_freq, fig_cb_ethn_prop)
+
+# - proportion of income within each group
+fig_alc_income_freq <- table(
+  df_final$cc_alc, df_final$income, useNA = 'ifany')
+fig_alc_income_prop <- prop.table(table(
+  df_final$cc_alc, df_final$income, useNA = 'ifany'))
+capture.output(fig_alc_income_freq, file = 'output/fig_alc_income_freq.txt')
+capture.output(fig_alc_income_prop, file = 'output/fig_alc_income_prop.txt')
+rm(fig_alc_income_freq, fig_alc_income_prop)
+
+fig_cb_income_freq <- table(
+  df_final$cc_cb, df_final$income, useNA = 'ifany')
+fig_cb_income_prop <- prop.table(table(
+  df_final$cc_cb, df_final$income, useNA = 'ifany'))
+capture.output(fig_cb_income_freq, file = 'output/fig_cb_income_freq.txt')
+capture.output(fig_cb_income_prop, file = 'output/fig_cb_income_prop.txt')
+rm(fig_cb_income_freq, fig_cb_income_prop)
+
+# - proportion of prenatal exposure within each group
+fig_alc_exp_sub_freq <- table(
+  df_final$cc_alc, df_final$exp_sub, useNA = 'ifany')
+fig_alc_exp_sub_prop <- prop.table(table(
+  df_final$cc_alc, df_final$exp_sub, useNA = 'ifany'))
+capture.output(fig_alc_exp_sub_freq, file = 'output/fig_alc_exp_sub_freq.txt')
+capture.output(fig_alc_exp_sub_prop, file = 'output/fig_alc_exp_sub_prop.txt')
+rm(fig_alc_exp_sub_freq, fig_alc_exp_sub_prop)
+
+fig_cb_exp_sub_freq <- table(
+  df_final$cc_cb, df_final$exp_sub, useNA = 'ifany')
+fig_cb_exp_sub_prop <- prop.table(table(
+  df_final$cc_cb, df_final$exp_sub, useNA = 'ifany'))
+capture.output(fig_cb_exp_sub_freq, file = 'output/fig_cb_exp_sub_freq.txt')
+capture.output(fig_cb_exp_sub_prop, file = 'output/fig_cb_exp_sub_prop.txt')
+rm(fig_cb_exp_sub_freq, fig_cb_exp_sub_prop)
+
+# - mean and SD of age in each group
+
+fig_alc_age <- df_final %>%
+  group_by(cc_alc) %>%
+  select(cc_alc, tlfb_age_l) %>%
+  summarise(
+    tlfb_age_l_mean = mean(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_sd = sd(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_min = min(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_max = max(tlfb_age_l, na.rm = TRUE))
+
+write.csv(fig_alc_age,'output/fig_alc_age.csv')
+rm(fig_alc_age)
+
+fig_cb_age <- df_final %>%
+  group_by(cc_cb) %>%
+  select(cc_cb, tlfb_age_l) %>%
+  summarise(
+    tlfb_age_l_mean = mean(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_sd = sd(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_min = min(tlfb_age_l, na.rm = TRUE),
+    tlfb_age_l_max = max(tlfb_age_l, na.rm = TRUE))
+
+write.csv(fig_cb_age,'output/fig_cb_age.csv')
+rm(fig_cb_age)
+
+# - mean and SD of CBCL total in each group
+
+fig_alc_cbcl <- df_final %>%
+  group_by(cc_alc) %>%
+  select(cc_alc, cbcl_scr_syn_totprob_r, cbcl_scr_syn_internal_r, cbcl_scr_syn_external_r) %>%
+  summarise(
+    cbcl_scr_syn_totprob_r_mean = mean(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_sd = sd(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_min = min(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_max = max(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_mean = mean(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    ccbcl_scr_syn_internal_r_sd = sd(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_min = min(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_max = max(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_mean = mean(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_sd = sd(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_min = min(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_max = max(cbcl_scr_syn_external_r, na.rm = TRUE))
+    
+write.csv(fig_alc_cbcl,'output/fig_alc_cbcl.csv')
+rm(fig_alc_cbcl)
+
+fig_cb_cbcl <- df_final %>%
+  group_by(cc_cb) %>%
+  select(cc_cb, cbcl_scr_syn_totprob_r, cbcl_scr_syn_internal_r, cbcl_scr_syn_external_r) %>%
+  summarise(
+    cbcl_scr_syn_totprob_r_mean = mean(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_sd = sd(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_min = min(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_totprob_r_max = max(cbcl_scr_syn_totprob_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_mean = mean(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    ccbcl_scr_syn_internal_r_sd = sd(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_min = min(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_internal_r_max = max(cbcl_scr_syn_internal_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_mean = mean(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_sd = sd(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_min = min(cbcl_scr_syn_external_r, na.rm = TRUE),
+    cbcl_scr_syn_external_r_max = max(cbcl_scr_syn_external_r, na.rm = TRUE))
+    
+write.csv(fig_cb_cbcl,'output/fig_cb_cbcl.csv')
+rm(fig_cb_cbcl)
+
+# - mean and SD of family hx in each group
+
+fig_alc_mh_density <- df_final %>%
+  group_by(cc_alc) %>%
+  select(cc_alc, mh_density) %>%
+  summarise(
+    mh_density_mean = mean(mh_density, na.rm = TRUE),
+    mh_density_sd = sd(mh_density, na.rm = TRUE),
+    mh_density_min = min(mh_density, na.rm = TRUE),
+    mh_density_max = max(mh_density, na.rm = TRUE))
+
+write.csv(fig_alc_mh_density,'output/fig_alc_mh_density.csv')
+rm(fig_alc_mh_density)
+
+fig_cb_mh_density <- df_final %>%
+  group_by(cc_cb) %>%
+  select(cc_cb, mh_density) %>%
+  summarise(
+    mh_density_mean = mean(mh_density, na.rm = TRUE),
+    mh_density_sd = sd(mh_density, na.rm = TRUE),
+    mh_density_min = min(mh_density, na.rm = TRUE),
+    mh_density_max = max(mh_density, na.rm = TRUE))
+
+write.csv(fig_cb_mh_density,'output/fig_cb_mh_density.csv')
+rm(fig_cb_mh_density)
+
+```
+
+
+# Models
++ RG updated mice object for models to be mids_df_final for initiation outcomes
++ Question: why are no random effect included for initiation models?
++ RG notes on model fit:
+  + (1a) initiation - alcohol
+    + highly skewed outcome (238 vs 6279) likely contributing to binned residuals. Would consider some type of matching 
+      ([MatchIt](https://cran.r-project.org/web/packages/MatchIt/vignettes/matching-methods.html)) as an alternative model. 
+  + (1b) initiation - cannabis
+      + highly skewed outcome (63 vs 8565) likely contributing to binned residuals. Would consider some type of matching 
+      ([MatchIt](https://cran.r-project.org/web/packages/MatchIt/vignettes/matching-methods.html)) as an alternative model. 
+  + (2a) expectancies - alcohol
+    + Posterior predictive check plot indicates some positive skew in outcome. You might try a Poisson or negative binomial 
+      regression. I suspect the results will be very similar across models. 
+  + (2b) expectancies - cannabis
+    + Posterior predictive check plot looks like the outcome may fit a bimodal distribution. You might consider trying some 
+      type of model for bimodal outcomes such as [multimode](https://cran.r-project.org/web/packages/multimode/multimode.pdf).
+      to see if the results change. 
+  + (3a) perceptions of harm - alcohol
+    + Some indication of heteroscedasticity in the homogeneity of variance plot, you could add robust SE to account for this
+      [robustlmm](https://cran.r-project.org/web/packages/robustlmm/robustlmm.pdf). Linearity of residuals is not showing a great
+      fit, so you could see if Poisson or negative binomial may improve fit. Bootstrapping is another option to deal with
+      non-normality of residuals. 
+  + (3b) perceptions of harm - cannabis
+    + Posterior predictive check plot indicates some negative skew in the outcome (which may also be contributing to not the best
+      fit with the linearity plot). Same suggestion as for alcohol, you could test Poisson or negative binomial. Bootstrapping is
+      also an option for non-normality of residuals. 
++ Note
+  + Interpreting the plots from the performance package can be a bit subjective. I found one page that I think is a helpful
+    [reference](https://easystats.github.io/performance/articles/check_model.html) for looking at plots from the performance 
+    package. There is also 
+
+```{r eval = FALSE}
+
+#------------------------------------------------------------------------------#
+#                 Final Models - Alcohol Initiation
+#------------------------------------------------------------------------------#
+#for internship project will keep as is, but will try MatchThem with random effects for publication
+
+fit_alc_DV <- with(mids_df_final,
+                   glm(formula = DV_alc ~ cc_alc +
+                         tlfb_age_l + sex + race_4l + eth_hisp + income + exp_sub +
+                         mh_density + cbcl_scr_syn_external_r + cbcl_scr_syn_internal_r,
+                       family = 'binomial')) #runs
+
+fit_alc_DV_summary <- summary(pool(fit_alc_DV),
+                              conf.int = TRUE, exponentiate = TRUE) %>%
+  rename(OR = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, OR, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_alc_DV_summary
+write.csv(fit_alc_DV_summary,'output/fit_alc_DV_summary.csv')
+rm(fit_alc_DV_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_alc_DV_imp1 <- fit_alc_DV$analyses[[1]]
+fit_alc_DV_imp2 <- fit_alc_DV$analyses[[2]]
+fit_alc_DV_imp3 <- fit_alc_DV$analyses[[3]]
+fit_alc_DV_imp4 <- fit_alc_DV$analyses[[4]]
+fit_alc_DV_imp5 <- fit_alc_DV$analyses[[5]]
+testDispersion(fit_alc_DV_imp1)
+testDispersion(fit_alc_DV_imp2)
+testDispersion(fit_alc_DV_imp3)
+testDispersion(fit_alc_DV_imp4)
+testDispersion(fit_alc_DV_imp5)
+
+
+# all non-significant
+check_singularity(fit_alc_DV_imp1)
+check_singularity(fit_alc_DV_imp2)
+check_singularity(fit_alc_DV_imp3)
+check_singularity(fit_alc_DV_imp4)
+check_singularity(fit_alc_DV_imp5)
+
+# all FALSE
+vif(fit_alc_DV_imp1)
+vif(fit_alc_DV_imp2)
+vif(fit_alc_DV_imp3)
+vif(fit_alc_DV_imp4)
+vif(fit_alc_DV_imp5)
+
+# all < 2
+check_outliers(fit_alc_DV_imp1)
+check_outliers(fit_alc_DV_imp2)
+check_outliers(fit_alc_DV_imp3)
+check_outliers(fit_alc_DV_imp4)
+check_outliers(fit_alc_DV_imp5)
+
+# no outliers Error in loadNamespace(j <- i[[1L]], c(lib.loc, .libPaths()), versionCheck = vI[[j]]) : namespace ‘insight’ 0.19.7 is already loaded, but >= 0.19.8 is required
+#check_model(fit_alc_DV_imp1, check = "all")
+#check_model(fit_alc_DV_imp2, check = "all")
+#check_model(fit_alc_DV_imp3, check = "all")
+#check_model(fit_alc_DV_imp4, check = "all")
+#check_model(fit_alc_DV_imp5, check = "all")
+
+# some issues with binned residuals
+br_imp1 <- binned_residuals(fit_alc_DV_imp1)
+br_imp2 <- binned_residuals(fit_alc_DV_imp2)
+br_imp3 <- binned_residuals(fit_alc_DV_imp3)
+br_imp4 <- binned_residuals(fit_alc_DV_imp4)
+br_imp5 <- binned_residuals(fit_alc_DV_imp5)
+write.csv(br_imp1,'output/br_imp1.csv')
+write.csv(br_imp2,'output/br_imp2.csv')
+write.csv(br_imp3,'output/br_imp3.csv')
+write.csv(br_imp4,'output/br_imp4.csv')
+write.csv(br_imp5,'output/br_imp5.csv')
+
+skew(df_final$DV_alc)
+hist(df_final$DV_alc)
+
+# likely due to skew in outcome, zero-inflated or negative binomial model
+# may be more appropriate
+rm(fit_alc_DV,
+   fit_alc_DV_imp1, fit_alc_DV_imp2, fit_alc_DV_imp3, fit_alc_DV_imp4,
+   fit_alc_DV_imp5,
+   br_imp1, br_imp2, br_imp3, br_imp4, br_imp5)
+
+#------------------------------------------------------------------------------#
+#                 Final Models - Expectancies
+#------------------------------------------------------------------------------#
+
+# random effect: family ID nested within site ID
+fit_alc_exp <- with(
+  mids_df_final,
+  lmer(formula = alc_exp ~ cc_alc + tlfb_age_l + sex + race_4l +
+         eth_hisp + income + exp_sub + mh_density + cbcl_scr_syn_external_r +
+         cbcl_scr_syn_internal_r + (1 | site_id_l / rel_family_id)))
+
+# summary(fit_alc_exp)
+# nobs = data present for alc_exp
+fit_alc_exp_summary <- summary(pool(fit_alc_exp), conf.int = TRUE) %>%
+  rename(estimate = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, estimate, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_alc_exp_summary
+write.csv(fit_alc_exp_summary,'output/fit_alc_exp_summary.csv')
+rm(fit_alc_exp_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_alc_exp_imp1 <- fit_alc_exp$analyses[[1]]
+fit_alc_exp_imp2 <- fit_alc_exp$analyses[[2]]
+fit_alc_exp_imp3 <- fit_alc_exp$analyses[[3]]
+fit_alc_exp_imp4 <- fit_alc_exp$analyses[[4]]
+fit_alc_exp_imp5 <- fit_alc_exp$analyses[[5]]
+testDispersion(fit_alc_exp_imp1)
+testDispersion(fit_alc_exp_imp2)
+testDispersion(fit_alc_exp_imp3)
+testDispersion(fit_alc_exp_imp4)
+testDispersion(fit_alc_exp_imp5)
+
+# all non-significant
+check_singularity(fit_alc_exp_imp1)
+check_singularity(fit_alc_exp_imp2)
+check_singularity(fit_alc_exp_imp3)
+check_singularity(fit_alc_exp_imp4)
+check_singularity(fit_alc_exp_imp5)
+
+# all FALSE
+vif(fit_alc_exp_imp1)
+vif(fit_alc_exp_imp2)
+vif(fit_alc_exp_imp3)
+vif(fit_alc_exp_imp4)
+vif(fit_alc_exp_imp5)
+
+# all < 2
+check_outliers(fit_alc_exp_imp1)
+check_outliers(fit_alc_exp_imp2)
+check_outliers(fit_alc_exp_imp3)
+check_outliers(fit_alc_exp_imp4)
+check_outliers(fit_alc_exp_imp5)
+
+# no outliers (error = Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.)
+#check_model(fit_alc_exp_imp1, check = "all")
+#check_model(fit_alc_exp_imp2, check = "all")
+#check_model(fit_alc_exp_imp3, check = "all")
+#check_model(fit_alc_exp_imp4, check = "all")
+#check_model(fit_alc_exp_imp5, check = "all")
+
+skew(df_final$alc_exp)
+hist(df_final$alc_exp)
+
+# all looks approximately normal
+rm(fit_alc_exp,
+   fit_alc_exp_imp1, fit_alc_exp_imp2, fit_alc_exp_imp3, fit_alc_exp_imp4,
+   fit_alc_exp_imp5)
+
+#------------------------------------------------------------------------------#
+#                 Final Models - Perceptions
+#------------------------------------------------------------------------------#
+
+# random effect: family ID nested within site ID
+fit_alc_per <- with(
+  mids_df_final,
+  lmer(formula = alc_per ~ cc_alc + tlfb_age_l + sex + race_4l +
+         eth_hisp + income + exp_sub + mh_density + cbcl_scr_syn_external_r +
+         cbcl_scr_syn_internal_r + (1 | site_id_l / rel_family_id)))
+
+# summary(fit_alc_per)
+# nobs = data present for alc_per
+fit_alc_per_summary <- summary(pool(fit_alc_per), conf.int = TRUE) %>%
+  rename(estimate = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, estimate, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_alc_per_summary
+write.csv(fit_alc_per_summary,'output/fit_alc_per_summary.csv')
+rm(fit_alc_per_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_alc_per_imp1 <- fit_alc_per$analyses[[1]]
+fit_alc_per_imp2 <- fit_alc_per$analyses[[2]]
+fit_alc_per_imp3 <- fit_alc_per$analyses[[3]]
+fit_alc_per_imp4 <- fit_alc_per$analyses[[4]]
+fit_alc_per_imp5 <- fit_alc_per$analyses[[5]]
+testDispersion(fit_alc_per_imp1)
+testDispersion(fit_alc_per_imp2)
+testDispersion(fit_alc_per_imp3)
+testDispersion(fit_alc_per_imp4)
+testDispersion(fit_alc_per_imp5)
+
+# all non-significant
+check_singularity(fit_alc_per_imp1)
+check_singularity(fit_alc_per_imp2)
+check_singularity(fit_alc_per_imp3)
+check_singularity(fit_alc_per_imp4)
+check_singularity(fit_alc_per_imp5)
+
+# all FALSE
+vif(fit_alc_per_imp1)
+vif(fit_alc_per_imp2)
+vif(fit_alc_per_imp3)
+vif(fit_alc_per_imp4)
+vif(fit_alc_per_imp5)
+
+# all < 2
+check_outliers(fit_alc_per_imp1)
+check_outliers(fit_alc_per_imp2)
+check_outliers(fit_alc_per_imp3)
+check_outliers(fit_alc_per_imp4)
+check_outliers(fit_alc_per_imp5)
+
+# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
+#check_model(fit_alc_per_imp1, check = "all")
+#check_model(fit_alc_per_imp2, check = "all")
+#check_model(fit_alc_per_imp3, check = "all")
+#check_model(fit_alc_per_imp4, check = "all")
+#check_model(fit_alc_per_imp5, check = "all")
+
+skew(df_final$alc_per)
+hist(df_final$alc_per)
+
+# all looks approximately normal
+rm(fit_alc_per,
+   fit_alc_per_imp1, fit_alc_per_imp2, fit_alc_per_imp3, fit_alc_per_imp4,
+   fit_alc_per_imp5)
+   
+#------------------------------------------------------------------------------#
+#                     Final Models - Cannabis Initiation
+#------------------------------------------------------------------------------#
+
+fit_cb_DV <- with(mids_df_final,
+                  glm(
+                    formula = DV_cb ~ cc_cb +
+                      tlfb_age_l + sex + race_4l + eth_hisp + income + exp_sub +
+                      mh_density + cbcl_scr_syn_external_r + cbcl_scr_syn_internal_r,
+                    family = 'binomial')) #runs
+
+# summary(fit_cb_DV)
+# confirmed nobs (n sample size)
+# nobs = data present for DV_cb
+fit_cb_DV_summary <- summary(pool(fit_cb_DV),
+                             conf.int = TRUE, exponentiate = TRUE) %>%
+  rename(OR = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, OR, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_cb_DV_summary
+write.csv(fit_cb_DV_summary,'output/fit_cb_DV_summary.csv')
+rm(fit_cb_DV_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_cb_DV_imp1 <- fit_cb_DV$analyses[[1]]
+fit_cb_DV_imp2 <- fit_cb_DV$analyses[[2]]
+fit_cb_DV_imp3 <- fit_cb_DV$analyses[[3]]
+fit_cb_DV_imp4 <- fit_cb_DV$analyses[[4]]
+fit_cb_DV_imp5 <- fit_cb_DV$analyses[[5]]
+
+testDispersion(fit_cb_DV_imp1)
+testDispersion(fit_cb_DV_imp2)
+testDispersion(fit_cb_DV_imp3)
+testDispersion(fit_cb_DV_imp4)
+testDispersion(fit_cb_DV_imp5)
+
+# all non-significant
+check_singularity(fit_cb_DV_imp1)
+check_singularity(fit_cb_DV_imp2)
+check_singularity(fit_cb_DV_imp3)
+check_singularity(fit_cb_DV_imp4)
+check_singularity(fit_cb_DV_imp5)
+
+# all FALSE
+vif(fit_cb_DV_imp1)
+vif(fit_cb_DV_imp2)
+vif(fit_cb_DV_imp3)
+vif(fit_cb_DV_imp4)
+vif(fit_cb_DV_imp5)
+
+# all < 2
+check_outliers(fit_cb_DV_imp1)
+check_outliers(fit_cb_DV_imp2)
+check_outliers(fit_cb_DV_imp3)
+check_outliers(fit_cb_DV_imp4)
+check_outliers(fit_cb_DV_imp5)
+
+# no outliers (Error in loadNamespace(j <- i[[1L]], c(lib.loc, .libPaths()), versionCheck = vI[[j]]): namespace ‘insight’ 0.19.7 is already loaded, but >= 0.19.8 is required)
+#check_model(fit_cb_DV_imp1, check = "all")
+#check_model(fit_cb_DV_imp2, check = "all")
+#check_model(fit_cb_DV_imp3, check = "all")
+#check_model(fit_cb_DV_imp4, check = "all")
+#check_model(fit_cb_DV_imp5, check = "all")
+
+# some issues with binned residuals
+br_imp1 <- binned_residuals(fit_cb_DV_imp1)
+br_imp2 <- binned_residuals(fit_cb_DV_imp2)
+br_imp3 <- binned_residuals(fit_cb_DV_imp3)
+br_imp4 <- binned_residuals(fit_cb_DV_imp4)
+br_imp5 <- binned_residuals(fit_cb_DV_imp5)
+write.csv(br_imp1,'output/br_imp1_cb.csv')
+write.csv(br_imp2,'output/br_imp2_cb.csv')
+write.csv(br_imp3,'output/br_imp3_cb.csv')
+write.csv(br_imp4,'output/br_imp4_cb.csv')
+write.csv(br_imp5,'output/br_imp5_cb.csv')
+
+skew(df_final$DV_cb)
+hist(df_final$DV_cb)
+
+rm(fit_cb_DV,
+   fit_cb_DV_imp1, fit_cb_DV_imp2, fit_cb_DV_imp3, fit_cb_DV_imp4,
+   fit_cb_DV_imp5,
+   br_imp1, br_imp2, br_imp3, br_imp4, br_imp5)
+
+#------------------------------------------------------------------------------#
+#               Final Models - Cannabis Expectancies
+#------------------------------------------------------------------------------#
+
+fit_cb_exp <- with(
+  mids_df_final,
+  lmer(formula = cb_exp ~ cc_cb + tlfb_age_l + sex + race_4l +
+         eth_hisp + income + exp_sub + mh_density + cbcl_scr_syn_external_r +
+         cbcl_scr_syn_internal_r + (1 | site_id_l / rel_family_id)))
+
+
+# summary(fit_cb_exp)
+# confirmed nobs (n sample size)
+# nobs = data present for cb_exp
+fit_cb_exp_summary <- summary(pool(fit_cb_exp), conf.int = TRUE) %>%
+  rename(estimate = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, estimate, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_cb_exp_summary
+write.csv(fit_cb_exp_summary,'output/fit_cb_exp_summary.csv')
+rm(fit_cb_exp_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_cb_exp_imp1 <- fit_cb_exp$analyses[[1]]
+fit_cb_exp_imp2 <- fit_cb_exp$analyses[[2]]
+fit_cb_exp_imp3 <- fit_cb_exp$analyses[[3]]
+fit_cb_exp_imp4 <- fit_cb_exp$analyses[[4]]
+fit_cb_exp_imp5 <- fit_cb_exp$analyses[[5]]
+testDispersion(fit_cb_exp_imp1)
+testDispersion(fit_cb_exp_imp2)
+testDispersion(fit_cb_exp_imp3)
+testDispersion(fit_cb_exp_imp4)
+testDispersion(fit_cb_exp_imp5)
+
+# all non-significant
+check_singularity(fit_cb_exp_imp1)
+check_singularity(fit_cb_exp_imp2)
+check_singularity(fit_cb_exp_imp3)
+check_singularity(fit_cb_exp_imp4)
+check_singularity(fit_cb_exp_imp5)
+
+# all FALSE
+vif(fit_cb_exp_imp1)
+vif(fit_cb_exp_imp2)
+vif(fit_cb_exp_imp3)
+vif(fit_cb_exp_imp4)
+vif(fit_cb_exp_imp5)
+
+# all < 2
+check_outliers(fit_cb_exp_imp1)
+check_outliers(fit_cb_exp_imp2)
+check_outliers(fit_cb_exp_imp3)
+check_outliers(fit_cb_exp_imp4)
+check_outliers(fit_cb_exp_imp5)
+
+# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
+#check_model(fit_cb_exp_imp1, check = "all")
+#check_model(fit_cb_exp_imp2, check = "all")
+#check_model(fit_cb_exp_imp3, check = "all")
+#check_model(fit_cb_exp_imp4, check = "all")
+#check_model(fit_cb_exp_imp5, check = "all")
+
+skew(df_final$cb_exp)
+hist(df_final$cb_exp)
+
+# all looks approximately normal
+rm(fit_cb_exp,
+   fit_cb_exp_imp1, fit_cb_exp_imp2, fit_cb_exp_imp3, fit_cb_exp_imp4,
+   fit_cb_exp_imp5)
+
+#------------------------------------------------------------------------------#
+#                       Final Models - Perceptions
+#------------------------------------------------------------------------------#
+
+fit_cb_per <- with(
+mids_df_final,
+lmer(formula = cb_per ~ cc_cb + tlfb_age_l + sex + race_4l +
+eth_hisp + income + exp_sub + mh_density + cbcl_scr_syn_external_r +
+cbcl_scr_syn_internal_r + (1 | site_id_l / rel_family_id)))
+
+
+# summary(fit_cb_per)
+# confirmed nobs (n sample size)
+# nobs = data present for cb_per
+fit_cb_per_summary <- summary(pool(fit_cb_per), conf.int = TRUE) %>%
+  rename(estimate = estimate ,
+         t.statistic = statistic,
+         SE = std.error,
+         Lower_CI = `2.5 %`,
+         Upper_CI = `97.5 %`) %>%
+  mutate_if(is.numeric,
+            round,
+            digits = 5) %>%
+  relocate(term, estimate, Lower_CI, Upper_CI, SE, t.statistic, df, p.value)
+fit_cb_per_summary
+write.csv(fit_cb_per_summary,'output/fit_cb_per_summary.csv')
+rm(fit_cb_per_summary)
+
+# check of model diagnostics with Performance package within each imputation
+par(mar=c(1,1,1,1))
+fit_cb_per_imp1 <- fit_cb_per$analyses[[1]]
+fit_cb_per_imp2 <- fit_cb_per$analyses[[2]]
+fit_cb_per_imp3 <- fit_cb_per$analyses[[3]]
+fit_cb_per_imp4 <- fit_cb_per$analyses[[4]]
+fit_cb_per_imp5 <- fit_cb_per$analyses[[5]]
+testDispersion(fit_cb_per_imp1)
+testDispersion(fit_cb_per_imp2)
+testDispersion(fit_cb_per_imp3)
+testDispersion(fit_cb_per_imp4)
+testDispersion(fit_cb_per_imp5)
+
+# all non-significant
+check_singularity(fit_cb_per_imp1)
+check_singularity(fit_cb_per_imp2)
+check_singularity(fit_cb_per_imp3)
+check_singularity(fit_cb_per_imp4)
+check_singularity(fit_cb_per_imp5)
+
+# all FALSE
+vif(fit_cb_per_imp1)
+vif(fit_cb_per_imp2)
+vif(fit_cb_per_imp3)
+vif(fit_cb_per_imp4)
+vif(fit_cb_per_imp5)
+
+# all < 2
+check_outliers(fit_cb_per_imp1)
+check_outliers(fit_cb_per_imp2)
+check_outliers(fit_cb_per_imp3)
+check_outliers(fit_cb_per_imp4)
+check_outliers(fit_cb_per_imp5)
+
+# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
+#check_model(fit_cb_per_imp1, check = "all")
+#check_model(fit_cb_per_imp2, check = "all")
+#check_model(fit_cb_per_imp3, check = "all")
+#check_model(fit_cb_per_imp4, check = "all")
+#check_model(fit_cb_per_imp5, check = "all")
+
+# all looks approximately normal
+rm(fit_cb_per,
+   fit_cb_per_imp1, fit_cb_per_imp2, fit_cb_per_imp3, fit_cb_per_imp4,
+   fit_cb_per_imp5)
+
+```
