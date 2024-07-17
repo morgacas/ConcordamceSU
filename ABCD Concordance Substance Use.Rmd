@@ -1,22 +1,3 @@
----
-title: "CM Syntax Review #3 - Internship Paper"
-author: "ReJoyce Green"
-output:
-  word_document:
-    toc: true
-  pdf_document:
-    toc: true
-    latex_engine: xelatex
-editor_options:
-  chunk_output_type: console
----
-
-# Overview
-+ Syntax from CM 'Concordance Paper Syntax Updated 3..txt' file. 
-+ RG changes: 
-  + minor formatting changes to take syntax from .txt to .Rmd
-  + major changes are indicated in syntax ('RG NOTE') and in notes section of syntax
-
 # Data wrangling 
 
 ## Create final dataset based on inclusion criteria
@@ -219,59 +200,10 @@ df_final <- df_final %>%
 
 rm(IC_2)
 
-#--- Final Sample Size ---#
-# n = 10973
-#   - initial sample size for 2-year in 5.1 release notes
-# n = 10962
-#   - data present for parent or youth CRPF (sample size of crpf dataframe)
-# n = 8930
-#   - met inclusion criteria #1: data present for creating concordance 
-#     variable at 2-year follow-up
-# n = 8713
-#   - met inclusion criteria #2: attended 30-month or 3-year visit to create
-#     initiation outcome
-#--- Final Sample Size ---#
-
 # create dataset that only contains ID for final sample
 
 df_final_ID <- df_final %>% 
   select(src_subject_id)
-
-#--- RG NOTE:
-# - I like to create a dataframe that only has IDs for the final sample. This
-#   way when I am starting to create summary scores for variables later on,
-#   and I want to subset to only include those in my final sample to see how
-#   the number of 777s I am changing to NA for example, I have an easy way to
-#   subset the dataframe based on these final IDs
-
-```
-
-
-## Create summary scores for relevant variables
-
-+ Outcome
-  + (1) Substance use initiation 
-    + Based on the updates to the inclusion criteria, we can assume that all who have data for alcohol concordance
-      have heard of alcohol, and that all who have data present for cannabis concordance have heard of cannabis. Therefore,
-      previous inclusion criteria of having data present for 'heard of' alcohol or cannabis has been addressed with inclusion
-      criteria #1. 
-    + Lingering item to address: if someone did not indicate substance use at 30-month and did not attend 3-year, I would suggest 
-      not including them in the SU initiation models on the basis that they could have initiated at the 3-year mark but we do not
-      know. 
-  + (2) Expectancies
-    + Using pre-calculated summary scores where data must be present for all individual items for summary score to be created. 
-  + (3) Perceptions of Harm
-    + Creating summary scores defined as a sum of 3 items. Using all data available (i.e., if data present for only 2 individual
-      items, then final summary score reflects sum of those 2 items).
-    + Included a breakdown of the IDs that had data present for all 3 items, 2 items, or 1 item (for alcohol and cannabis, 
-      respectively). If missing data on all 3 individual items, then final summary score coded as 'NA' (previously was being
-      coded as 0)
-  
-+ Covariates
-
-
-
-```{r eval = FALSE}
 
 #------------------------------------------------------------------------------#
 #                 Substance Initiation: Alcohol and Cannabis 
@@ -367,13 +299,6 @@ df_sub <- df_sub %>%
 #   left_join(su_yr, by = 'src_subject_id')
 
 # rm(temp, su_yr)
-
-#--- RG NOTE:
-# - I commented out the syntax above for checking who completed the 2-year 
-#   follow-up b/c I have created a final substance use dataset that only
-#   includes those who met the 2 inclusion criteria, so we know they attended
-#   the 2-year follow-up
-#--- RG NOTE:
 
 #----------
 # Create SU initiation variables
@@ -1313,12 +1238,7 @@ setdiff(actuallyImputedVars, imputedVars)
 cat("### Variables that were planned for MI but not imputed\n")
 setdiff(imputedVars, actuallyImputedVars)
 ```
-
-
 ## Prep final dataset for models
-
-
-```{r eval = FALSE}
 
 #--- RG NOTE:
 # - packages for mixed models will only use data available, so you don't have 
@@ -1349,70 +1269,7 @@ rm(
    actuallyImputedVars, allVars, imputedOnlyVars, imputedVars, imputerVars,
    M, methods, missVars, predictorMatrix, imputedMatrix, imputerMatrix, dryMice)
 
-#--- RG NOTE:
-
-# CM original syntax below 
-
-# # convert mids object into dataframe
-# mice_df_final <-mice::complete(miceout, "long", include = TRUE)
-# table(mice_df_final$.imp)
-# 
-# # alcohol initiation:
-# # - complete data on alcohol initiation
-# mice_df_alc <- mice_df_final %>%
-#   subset(!is.na(DV_alc))
-# table(mice_df_alc$DV_alc, useNA = 'ifany')
-# table(mice_df_alc$.imp, useNA = 'ifany')
-# 
-# # cannabis initiation:
-# # - complete data on alcohol initiation
-# mice_df_cb <- mice_df_final %>%
-#   subset(!is.na(DV_cb))
-# table(mice_df_cb$DV_cb, useNA = 'ifany')
-# table(mice_df_cb$.imp, useNA = 'ifany')
-# 
-# # set reference group
-# mice_df_alc$cc_alc <- relevel(factor(mice_df_alc$cc_alc), ref = 'Concordance Limited A')
-# mice_df_final$cc_alc <- relevel(factor(mice_df_final$cc_alc), ref = 'Concordance Limited A')
-# 
-# mice_df_cb$cc_cb <-relevel(factor(mice_df_cb$cc_cb), ref = 'Concordance Limited C')
-# mice_df_final$cc_cb <-relevel(factor(mice_df_final$cc_cb), ref = 'Concordance Limited C')
-# 
-# mice_df_alc$sex <- relevel(mice_df_alc$sex, ref = 'Male')
-# mice_df_cb$sex <- relevel(mice_df_cb$sex, ref = 'Male')
-# mice_df_final$sex <- relevel(mice_df_final$sex, ref = 'Male')
-# 
-# mice_df_alc$race_4l <- relevel(mice_df_alc$race_4l, ref = 'White')
-# mice_df_cb$race_4l <- relevel(mice_df_cb$race_4l, ref = 'White')
-# mice_df_final$race_4l <- relevel(mice_df_final$race_4l, ref = 'White')
-# 
-# mice_df_alc$eth_hisp <- relevel(mice_df_alc$eth_hisp, ref = 'non-Hispanic')
-# mice_df_cb$eth_hisp <- relevel(mice_df_cb$eth_hisp, ref = 'non-Hispanic')
-# mice_df_final$eth_hisp <- relevel(mice_df_final$eth_hisp, ref = 'non-Hispanic')
-# 
-# mice_df_alc$income <- relevel(mice_df_alc$income, ref = 'inc_9')
-# mice_df_cb$income <- relevel(mice_df_cb$income, ref = 'inc_9')
-# mice_df_final$income <- relevel(mice_df_final$income, ref = 'inc_9')
-# 
-# mice_df_alc$exp_sub <- relevel(mice_df_alc$exp_sub, ref = 'No')
-# mice_df_cb$exp_sub <- relevel(mice_df_cb$exp_sub, ref = 'No')
-# mice_df_final$exp_sub <- relevel(mice_df_final$exp_sub, ref = 'No')
-# 
-# # save as mids object
-# mids_alc <- as.mids(mice_df_alc)
-# mids_cb <- as.mids(mice_df_cb)
-# mids_df_final <- as.mids(mice_df_final)
-# 
-# rm(mice_df_alc, mice_df_cb, mice_df_final,
-#    actuallyImputedVars, allVars, imputedOnlyVars, imputedVars, imputerVars,
-#    M, methods, missVars, predictorMatrix, imputedMatrix, imputerMatrix, dryMice,
-#    df_final_before)
-
-```
-
-
 # Sample Characteristics
-
 
 ```{r eval = FALSE}
 
@@ -1716,47 +1573,9 @@ fig_cb_mh_density <- df_final %>%
 write.csv(fig_cb_mh_density,'output/fig_cb_mh_density.csv')
 rm(fig_cb_mh_density)
 
-```
-
-
-# Models
-+ RG updated mice object for models to be mids_df_final for initiation outcomes
-+ Question: why are no random effect included for initiation models?
-+ RG notes on model fit:
-  + (1a) initiation - alcohol
-    + highly skewed outcome (238 vs 6279) likely contributing to binned residuals. Would consider some type of matching 
-      ([MatchIt](https://cran.r-project.org/web/packages/MatchIt/vignettes/matching-methods.html)) as an alternative model. 
-  + (1b) initiation - cannabis
-      + highly skewed outcome (63 vs 8565) likely contributing to binned residuals. Would consider some type of matching 
-      ([MatchIt](https://cran.r-project.org/web/packages/MatchIt/vignettes/matching-methods.html)) as an alternative model. 
-  + (2a) expectancies - alcohol
-    + Posterior predictive check plot indicates some positive skew in outcome. You might try a Poisson or negative binomial 
-      regression. I suspect the results will be very similar across models. 
-  + (2b) expectancies - cannabis
-    + Posterior predictive check plot looks like the outcome may fit a bimodal distribution. You might consider trying some 
-      type of model for bimodal outcomes such as [multimode](https://cran.r-project.org/web/packages/multimode/multimode.pdf).
-      to see if the results change. 
-  + (3a) perceptions of harm - alcohol
-    + Some indication of heteroscedasticity in the homogeneity of variance plot, you could add robust SE to account for this
-      [robustlmm](https://cran.r-project.org/web/packages/robustlmm/robustlmm.pdf). Linearity of residuals is not showing a great
-      fit, so you could see if Poisson or negative binomial may improve fit. Bootstrapping is another option to deal with
-      non-normality of residuals. 
-  + (3b) perceptions of harm - cannabis
-    + Posterior predictive check plot indicates some negative skew in the outcome (which may also be contributing to not the best
-      fit with the linearity plot). Same suggestion as for alcohol, you could test Poisson or negative binomial. Bootstrapping is
-      also an option for non-normality of residuals. 
-+ Note
-  + Interpreting the plots from the performance package can be a bit subjective. I found one page that I think is a helpful
-    [reference](https://easystats.github.io/performance/articles/check_model.html) for looking at plots from the performance 
-    package. There is also 
-
-```{r eval = FALSE}
-
 #------------------------------------------------------------------------------#
 #                 Final Models - Alcohol Initiation
 #------------------------------------------------------------------------------#
-#for internship project will keep as is, but will try MatchThem with random effects for publication
-
 fit_alc_DV <- with(mids_df_final,
                    glm(formula = DV_alc ~ cc_alc +
                          tlfb_age_l + sex + race_4l + eth_hisp + income + exp_sub +
@@ -1813,7 +1632,6 @@ check_outliers(fit_alc_DV_imp3)
 check_outliers(fit_alc_DV_imp4)
 check_outliers(fit_alc_DV_imp5)
 
-# no outliers Error in loadNamespace(j <- i[[1L]], c(lib.loc, .libPaths()), versionCheck = vI[[j]]) : namespace ‘insight’ 0.19.7 is already loaded, but >= 0.19.8 is required
 #check_model(fit_alc_DV_imp1, check = "all")
 #check_model(fit_alc_DV_imp2, check = "all")
 #check_model(fit_alc_DV_imp3, check = "all")
@@ -1835,8 +1653,6 @@ write.csv(br_imp5,'output/br_imp5.csv')
 skew(df_final$DV_alc)
 hist(df_final$DV_alc)
 
-# likely due to skew in outcome, zero-inflated or negative binomial model
-# may be more appropriate
 rm(fit_alc_DV,
    fit_alc_DV_imp1, fit_alc_DV_imp2, fit_alc_DV_imp3, fit_alc_DV_imp4,
    fit_alc_DV_imp5,
@@ -1903,7 +1719,6 @@ check_outliers(fit_alc_exp_imp3)
 check_outliers(fit_alc_exp_imp4)
 check_outliers(fit_alc_exp_imp5)
 
-# no outliers (error = Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.)
 #check_model(fit_alc_exp_imp1, check = "all")
 #check_model(fit_alc_exp_imp2, check = "all")
 #check_model(fit_alc_exp_imp3, check = "all")
@@ -1979,7 +1794,6 @@ check_outliers(fit_alc_per_imp3)
 check_outliers(fit_alc_per_imp4)
 check_outliers(fit_alc_per_imp5)
 
-# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
 #check_model(fit_alc_per_imp1, check = "all")
 #check_model(fit_alc_per_imp2, check = "all")
 #check_model(fit_alc_per_imp3, check = "all")
@@ -1989,7 +1803,6 @@ check_outliers(fit_alc_per_imp5)
 skew(df_final$alc_per)
 hist(df_final$alc_per)
 
-# all looks approximately normal
 rm(fit_alc_per,
    fit_alc_per_imp1, fit_alc_per_imp2, fit_alc_per_imp3, fit_alc_per_imp4,
    fit_alc_per_imp5)
@@ -2058,7 +1871,6 @@ check_outliers(fit_cb_DV_imp3)
 check_outliers(fit_cb_DV_imp4)
 check_outliers(fit_cb_DV_imp5)
 
-# no outliers (Error in loadNamespace(j <- i[[1L]], c(lib.loc, .libPaths()), versionCheck = vI[[j]]): namespace ‘insight’ 0.19.7 is already loaded, but >= 0.19.8 is required)
 #check_model(fit_cb_DV_imp1, check = "all")
 #check_model(fit_cb_DV_imp2, check = "all")
 #check_model(fit_cb_DV_imp3, check = "all")
@@ -2094,7 +1906,6 @@ fit_cb_exp <- with(
   lmer(formula = cb_exp ~ cc_cb + tlfb_age_l + sex + race_4l +
          eth_hisp + income + exp_sub + mh_density + cbcl_scr_syn_external_r +
          cbcl_scr_syn_internal_r + (1 | site_id_l / rel_family_id)))
-
 
 # summary(fit_cb_exp)
 # confirmed nobs (n sample size)
@@ -2147,7 +1958,6 @@ check_outliers(fit_cb_exp_imp3)
 check_outliers(fit_cb_exp_imp4)
 check_outliers(fit_cb_exp_imp5)
 
-# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
 #check_model(fit_cb_exp_imp1, check = "all")
 #check_model(fit_cb_exp_imp2, check = "all")
 #check_model(fit_cb_exp_imp3, check = "all")
@@ -2157,7 +1967,6 @@ check_outliers(fit_cb_exp_imp5)
 skew(df_final$cb_exp)
 hist(df_final$cb_exp)
 
-# all looks approximately normal
 rm(fit_cb_exp,
    fit_cb_exp_imp1, fit_cb_exp_imp2, fit_cb_exp_imp3, fit_cb_exp_imp4,
    fit_cb_exp_imp5)
@@ -2224,14 +2033,12 @@ check_outliers(fit_cb_per_imp3)
 check_outliers(fit_cb_per_imp4)
 check_outliers(fit_cb_per_imp5)
 
-# no outliers Error: `check_model()` not implemented for models of class `lmerModLmerTest` yet.
 #check_model(fit_cb_per_imp1, check = "all")
 #check_model(fit_cb_per_imp2, check = "all")
 #check_model(fit_cb_per_imp3, check = "all")
 #check_model(fit_cb_per_imp4, check = "all")
 #check_model(fit_cb_per_imp5, check = "all")
 
-# all looks approximately normal
 rm(fit_cb_per,
    fit_cb_per_imp1, fit_cb_per_imp2, fit_cb_per_imp3, fit_cb_per_imp4,
    fit_cb_per_imp5)
